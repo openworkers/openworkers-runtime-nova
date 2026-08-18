@@ -236,7 +236,12 @@ impl openworkers_core::Worker for Worker {
         // SAFETY: the pointee stays alive until Drop.
         let hooks_ref = unsafe { hooks.as_ref() };
 
-        let mut agent = GcAgent::new(AgentOptions::default(), hooks_ref);
+        let options = AgentOptions {
+            // Guest JS must not block the runner thread: makes Atomics.wait() throw.
+            no_block: true,
+            ..Default::default()
+        };
+        let mut agent = GcAgent::new(options, hooks_ref);
 
         let create_global_object: Option<for<'a> fn(&mut Agent, GcScope<'a, '_>) -> Object<'a>> =
             None;
