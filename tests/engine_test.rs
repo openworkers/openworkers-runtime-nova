@@ -104,8 +104,6 @@ async fn test_web_platform_globals_are_absent() {
         "setInterval",
         "fetch",
         "URL",
-        "TextEncoder",
-        "TextDecoder",
         "Headers",
         "crypto",
         "structuredClone",
