@@ -28,6 +28,7 @@ use nova_vm::ecmascript::Value;
 use nova_vm::ecmascript::create_builtin_function;
 use nova_vm::engine::Bindable;
 use nova_vm::engine::GcScope;
+use nova_vm::engine::Scopable;
 
 use openworkers_core::Event;
 use openworkers_core::HttpRequest;
@@ -397,14 +398,13 @@ fn native_log<'gc>(
     args: ArgumentsList,
     mut gc: GcScope<'gc, '_>,
 ) -> JsResult<'gc, Value<'gc>> {
-    // The bootstrap glue always passes two strings, so the first to_string
-    // cannot trigger GC and invalidate the second argument.
-    let level = args.get(0);
-    let message = args.get(1);
+    // Guest code can pass objects here, so root arg 1 across arg 0's conversion.
+    let message = args.get(1).scope(agent, gc.nogc());
 
-    let level = level.to_string(agent, gc.reborrow()).unbind()?;
+    let level = args.get(0).to_string(agent, gc.reborrow()).unbind()?;
     let level = level.to_string_lossy(agent).into_owned();
-    let message = message.to_string(agent, gc).unbind()?;
+
+    let message = message.get(agent).to_string(agent, gc).unbind()?;
 
     eprintln!("[worker:{level}] {}", message.to_string_lossy(agent));
 
