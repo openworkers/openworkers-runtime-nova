@@ -100,6 +100,15 @@ async fn test_response_json_sets_the_json_content_type() {
 }
 
 #[tokio::test]
+async fn test_response_json_keeps_an_explicit_content_type() {
+    let script = "Response.json({ a: 1 }, { status: 201, \
+                  headers: { 'content-type': 'application/problem+json' } })\
+                  .headers.get('content-type')";
+
+    assert_eq!(js(script).await, "application/problem+json");
+}
+
+#[tokio::test]
 async fn test_response_redirect_carries_a_location() {
     let script = "(() => { const r = Response.redirect('http://a.com/x', 301); \
                   return r.status + '|' + r.headers.get('location'); })()";

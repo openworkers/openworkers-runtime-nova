@@ -227,11 +227,16 @@
     }
 
     static json(data, init) {
-      const response = new Response(JSON.stringify(data), init);
+      init = init || {};
 
-      response.headers.set('content-type', 'application/json');
+      // Only a default, and it has to beat the text/plain a string body implies.
+      const headers = new Headers(init.headers);
 
-      return response;
+      if (!headers.has('content-type')) {
+        headers.set('content-type', 'application/json');
+      }
+
+      return new Response(JSON.stringify(data), { ...init, headers: headers });
     }
 
     static redirect(url, status) {
