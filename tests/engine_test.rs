@@ -141,6 +141,67 @@ async fn test_regexp_lookaround_is_unsupported() {
 }
 
 #[tokio::test]
+async fn test_regexp_rejects_lone_surrogate_escapes() {
+    // What svelte's escape_html builds, so any SvelteKit error page dies here.
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            let outcome;
+
+            try {
+                outcome = 'matched ' + /[\ud800-\udbff][\udc00-\udfff]/.test('a');
+            } catch (error) {
+                outcome = String(error);
+            }
+
+            event.respondWith(new Response(outcome));
+        });
+    "#;
+
+    let body = serve_body(script).await;
+
+    assert!(body.contains("SyntaxError"), "{body}");
+    assert!(body.contains("not a Unicode scalar value"), "{body}");
+}
+
+#[tokio::test]
+async fn test_regexp_reads_a_nul_escape_as_a_backreference() {
+    // What devalue escapes with, so JSON payload serialization dies here.
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            let outcome;
+
+            try {
+                outcome = 'matched ' + /[\0\n]/.test('a');
+            } catch (error) {
+                outcome = String(error);
+            }
+
+            event.respondWith(new Response(outcome));
+        });
+    "#;
+
+    let body = serve_body(script).await;
+
+    assert!(body.contains("SyntaxError"), "{body}");
+    assert!(body.contains("backreferences are not supported"), "{body}");
+}
+
+#[tokio::test]
+async fn test_regexp_named_groups_stay_empty() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            const match = /(?<year>\d+)/.exec('42');
+
+            event.respondWith(new Response(
+                match[0] + ':' + JSON.stringify(Object.keys(match.groups))
+            ));
+        });
+    "#;
+
+    assert_eq!(serve_body(script).await, "42:[]");
+}
+
+#[tokio::test]
 async fn test_the_host_boundary_is_reachable_from_guest_code() {
     let script = r#"
         addEventListener('fetch', (event) => {
