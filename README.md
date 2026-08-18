@@ -28,6 +28,10 @@ OpenWorkers runtime backend for the [Nova JavaScript engine](https://trynova.dev
   no Promise subclassing, **no WebAssembly**.
 - MPL-2.0 is file-level copyleft: fine as an unmodified dependency of an
   MIT project; contributions to the engine go upstream.
+- **Lockfile pin (do not `cargo update` blindly):** `temporal_rs` 0.1.2
+  (nova_vm dep) uses icu4x `unstable` APIs and breaks against icu 2.3;
+  the committed `Cargo.lock` pins the icu4x family to 2.1.0. Re-pin after
+  any update, or bump `nova_vm` past the fix.
 
 ## Plan (when we pick this up)
 
