@@ -97,8 +97,8 @@ pub async fn js_err(expression: &str) -> String {
 
 fn js_script(expression: &str) -> String {
     format!(
-        "addEventListener('fetch', (event) => \
-         event.respondWith(new Response(String({expression}))));"
+        "addEventListener('fetch', (event) => event.respondWith(\
+         Promise.resolve({expression}).then((value) => new Response(String(value)))));"
     )
 }
 

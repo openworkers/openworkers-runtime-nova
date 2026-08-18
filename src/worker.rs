@@ -49,6 +49,7 @@ const RUNTIME_JS: &[&str] = &[
     include_str!("encoding.js"),
     include_str!("url.js"),
     include_str!("headers.js"),
+    include_str!("http.js"),
 ];
 
 /// Cap on jobs per drain, our only guard against runaway microtask loops

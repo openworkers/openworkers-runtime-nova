@@ -29,8 +29,8 @@ const ECHO_REQUEST: &str = r#"
         event.respondWith(new Response(JSON.stringify({
             method: request.method,
             url: request.url,
-            headers: request.headers,
-            bodyIsNull: request.body === null,
+            headers: Object.fromEntries(request.headers),
+            bodyUsed: request.bodyUsed,
             text: await request.text(),
         })));
     });
@@ -73,25 +73,44 @@ async fn test_every_http_method_reaches_the_handler() {
 }
 
 #[tokio::test]
-async fn test_url_reaches_the_guest_byte_for_byte() {
+async fn test_the_url_reaches_the_guest_in_its_parsed_form() {
     let urls = [
-        "http://localhost/plain",
-        "http://localhost/a\"b\\c",
-        "http://localhost/line\nbreak\ttab",
-        "http://localhost/</script>",
-        "http://localhost/\u{2028}\u{2029}",
-        "http://localhost/caf\u{e9}/\u{1f600}",
-        "http://localhost/%E2%82%AC?q=a%20b&q=c#frag",
-        "",
-        "not a url at all",
+        ("http://localhost/plain", "http://localhost/plain"),
+        ("http://localhost/a\"b\\c", "http://localhost/a%22b/c"),
+        (
+            "http://localhost/</script>",
+            "http://localhost/%3C/script%3E",
+        ),
+        (
+            "http://localhost/caf\u{e9}/\u{1f600}",
+            "http://localhost/caf%C3%A9/%F0%9F%98%80",
+        ),
+        (
+            "http://localhost/%E2%82%AC?q=a%20b&q=c#frag",
+            "http://localhost/%E2%82%AC?q=a%20b&q=c#frag",
+        ),
     ];
 
     let mut worker = worker(ECHO_URL).await;
 
-    for url in urls {
+    for (url, expected) in urls {
         let response = common::send(&mut worker, get(url)).await;
 
-        assert_eq!(body_text(response).await, url);
+        assert_eq!(body_text(response).await, expected);
+    }
+}
+
+#[tokio::test]
+async fn test_a_url_the_host_cannot_parse_fails_the_request() {
+    let mut worker = worker(ECHO_URL).await;
+
+    for url in ["", "not a url at all", "/relative"] {
+        let reason = common::send_err(&mut worker, get(url)).await;
+
+        assert!(
+            common::exception_message(reason).contains("Invalid URL"),
+            "for {url}"
+        );
     }
 }
 
@@ -106,7 +125,7 @@ async fn test_query_string_and_fragment_are_preserved() {
 }
 
 #[tokio::test]
-async fn test_header_names_keep_their_case() {
+async fn test_header_names_are_lowercased_and_values_combined() {
     let mut headers = HashMap::new();
     headers.insert("X-Mixed-Case".to_string(), "Value".to_string());
     headers.insert("x-mixed-case".to_string(), "other".to_string());
@@ -119,15 +138,22 @@ async fn test_header_names_keep_their_case() {
     })
     .await;
 
-    assert_eq!(json["headers"]["X-Mixed-Case"], "Value");
-    assert_eq!(json["headers"]["x-mixed-case"], "other");
+    let combined = json["headers"]["x-mixed-case"]
+        .as_str()
+        .expect("string")
+        .to_string();
+
+    assert!(
+        combined.contains("Value") && combined.contains("other"),
+        "{combined}"
+    );
+    assert!(json["headers"].get("X-Mixed-Case").is_none());
 }
 
 #[tokio::test]
-async fn test_unusual_header_names_and_values_survive() {
+async fn test_unusual_but_legal_headers_survive() {
     let mut headers = HashMap::new();
     headers.insert("empty".to_string(), String::new());
-    headers.insert("quote\"name".to_string(), "a\nb".to_string());
     headers.insert("x-unicode".to_string(), "caf\u{e9}".to_string());
 
     let json = echo(HttpRequest {
@@ -139,8 +165,31 @@ async fn test_unusual_header_names_and_values_survive() {
     .await;
 
     assert_eq!(json["headers"]["empty"], "");
-    assert_eq!(json["headers"]["quote\"name"], "a\nb");
     assert_eq!(json["headers"]["x-unicode"], "caf\u{e9}");
+}
+
+#[tokio::test]
+async fn test_a_header_http_forbids_fails_the_request() {
+    for (name, value) in [("quote\"name", "v"), ("x-newline", "a\nb")] {
+        let mut headers = HashMap::new();
+        headers.insert(name.to_string(), value.to_string());
+
+        let reason = common::fetch_err(
+            ECHO_REQUEST,
+            HttpRequest {
+                method: HttpMethod::Get,
+                url: URL.to_string(),
+                headers,
+                body: RequestBody::None,
+            },
+        )
+        .await;
+
+        assert!(
+            common::exception_message(reason).contains("TypeError"),
+            "for header {name}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -163,11 +212,11 @@ async fn test_a_large_header_value_round_trips() {
 }
 
 #[tokio::test]
-async fn test_the_request_headers_object_is_rebuilt_for_each_request() {
+async fn test_the_request_headers_are_rebuilt_for_each_request() {
     let script = r#"
         addEventListener('fetch', (event) => {
-            const seen = String(event.request.headers['x-added']);
-            event.request.headers['x-added'] = 'yes';
+            const seen = String(event.request.headers.get('x-added'));
+            event.request.headers.set('x-added', 'yes');
             event.respondWith(new Response(seen));
         });
     "#;
@@ -177,7 +226,7 @@ async fn test_the_request_headers_object_is_rebuilt_for_each_request() {
     for _ in 0..2 {
         let response = common::send(&mut worker, get(URL)).await;
 
-        assert_eq!(body_text(response).await, "undefined");
+        assert_eq!(body_text(response).await, "null");
     }
 }
 
@@ -205,7 +254,7 @@ async fn test_fifty_headers_all_arrive() {
 async fn test_missing_request_body_is_null() {
     let json = echo(get(URL)).await;
 
-    assert_eq!(json["bodyIsNull"], true);
+    assert_eq!(json["bodyUsed"], false);
     assert_eq!(json["text"], "");
 }
 
@@ -213,7 +262,7 @@ async fn test_missing_request_body_is_null() {
 async fn test_empty_request_body_is_an_empty_string() {
     let json = echo(post(URL, Bytes::new())).await;
 
-    assert_eq!(json["bodyIsNull"], false);
+    assert_eq!(json["bodyUsed"], false);
     assert_eq!(json["text"], "");
 }
 
@@ -301,8 +350,8 @@ async fn test_the_request_constructor_is_available_to_the_guest() {
                 request.url,
                 request.method,
                 await request.text(),
-                String(new Request('u').method),
-                String(new Request('u').body),
+                request.headers.get('content-type'),
+                new Request('http://elsewhere/path').method,
             ].join('|')));
         });
     "#;
@@ -311,8 +360,24 @@ async fn test_the_request_constructor_is_available_to_the_guest() {
 
     assert_eq!(
         body_text(response).await,
-        "http://elsewhere/|POST|b|GET|null"
+        "http://elsewhere/|POST|b|text/plain;charset=UTF-8|GET"
     );
+}
+
+#[tokio::test]
+async fn test_the_request_constructor_rejects_a_relative_url() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            try {
+                new Request('u');
+                event.respondWith(new Response('accepted'));
+            } catch (error) {
+                event.respondWith(new Response(String(error)));
+            }
+        });
+    "#;
+
+    assert!(common::serve_body(script).await.contains("TypeError"));
 }
 
 #[tokio::test]

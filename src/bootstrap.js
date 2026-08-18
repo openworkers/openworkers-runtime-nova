@@ -73,41 +73,6 @@
     }
   }
 
-  class Request {
-    constructor(url, init) {
-      init = init || {};
-      this.url = String(url);
-      this.method = init.method ? String(init.method).toUpperCase() : 'GET';
-      this.headers = init.headers || {};
-      this.body = init.body === undefined ? null : init.body;
-    }
-
-    text() {
-      return Promise.resolve(this.body === null ? '' : String(this.body));
-    }
-
-    json() {
-      return this.text().then(JSON.parse);
-    }
-  }
-
-  class Response {
-    constructor(body, init) {
-      init = init || {};
-      this.body = body === undefined || body === null ? '' : String(body);
-      this.status = init.status === undefined ? 200 : Number(init.status);
-      this.headers = init.headers || {};
-    }
-
-    text() {
-      return Promise.resolve(this.body);
-    }
-
-    json() {
-      return this.text().then(JSON.parse);
-    }
-  }
-
   function makeLog(level) {
     return function () {
       const parts = [];
@@ -129,8 +94,6 @@
   }
 
   globalThis.DOMException = DOMException;
-  globalThis.Request = Request;
-  globalThis.Response = Response;
   globalThis.console = {
     log: makeLog('log'),
     info: makeLog('info'),
@@ -178,11 +141,7 @@
 
   globalThis.__ow_dispatch = function (requestJson) {
     const data = JSON.parse(requestJson);
-    const request = new Request(data.url, {
-      method: data.method,
-      headers: data.headers,
-      body: data.body,
-    });
+    const request = __ow_request_from_wire(data);
     const event = {
       type: 'fetch',
       request: request,
@@ -207,13 +166,14 @@
         throw new Error('fetch handler did not call respondWith()');
       }
 
+      // A duck-typed response is still accepted, so read a body either way.
+      const raw =
+        typeof response.text === 'function' ? await response.text() : response.body;
+
       return {
         status: wireStatus(response.status),
         headers: headersToPairs(response.headers),
-        body:
-          response.body === undefined || response.body === null
-            ? ''
-            : wireText(response.body),
+        body: raw === undefined || raw === null ? '' : wireText(raw),
       };
     })());
   };

@@ -1,5 +1,7 @@
 mod common;
 
+use openworkers_core::HttpResponse;
+
 use common::exception_message;
 use common::serve;
 use common::serve_body;
@@ -9,9 +11,19 @@ fn respond_with(expression: &str) -> String {
     format!("addEventListener('fetch', (event) => event.respondWith({expression}));")
 }
 
+/// A string body sets content-type on its own; drop it where the test is
+/// about the headers the script asked for.
+fn declared_headers(response: HttpResponse) -> Vec<(String, String)> {
+    response
+        .headers
+        .into_iter()
+        .filter(|(name, _)| name != "content-type")
+        .collect()
+}
+
 #[tokio::test]
 async fn test_status_round_trips() {
-    for status in [100, 200, 204, 301, 404, 500, 599] {
+    for status in [200, 201, 301, 404, 500, 599] {
         let script = respond_with(&format!("new Response('b', {{ status: {status} }})"));
 
         assert_eq!(serve(&script).await.status, status);
@@ -20,7 +32,7 @@ async fn test_status_round_trips() {
 
 #[tokio::test]
 async fn test_status_outside_the_http_range_is_a_range_error() {
-    for status in ["-1", "0", "99", "600", "70000"] {
+    for status in ["-1", "0", "99", "100", "199", "600", "70000"] {
         let script = respond_with(&format!("new Response('b', {{ status: {status} }})"));
         let message = exception_message(serve_err(&script).await);
 
@@ -52,12 +64,21 @@ async fn test_a_status_that_is_not_an_integer_is_a_range_error() {
 }
 
 #[tokio::test]
-async fn test_status_204_keeps_the_body_it_was_given() {
-    let script = respond_with("new Response('nope', { status: 204 })");
+async fn test_a_null_body_status_refuses_a_body() {
+    for status in [204, 205, 304] {
+        let script = respond_with(&format!("new Response('nope', {{ status: {status} }})"));
+
+        assert!(
+            exception_message(serve_err(&script).await).contains("TypeError"),
+            "status {status}"
+        );
+    }
+
+    let script = respond_with("new Response(null, { status: 204 })");
     let response = serve(&script).await;
 
     assert_eq!(response.status, 204);
-    assert_eq!(common::body_text(response).await, "nope");
+    assert_eq!(common::body_text(response).await, "");
 }
 
 #[tokio::test]
@@ -65,7 +86,7 @@ async fn test_headers_from_a_plain_object() {
     let script = respond_with("new Response('ok', { headers: { 'x-a': '1', 'x-b': '2' } })");
 
     assert_eq!(
-        serve(&script).await.headers,
+        declared_headers(serve(&script).await),
         vec![
             ("x-a".to_string(), "1".to_string()),
             ("x-b".to_string(), "2".to_string()),
@@ -78,7 +99,7 @@ async fn test_headers_from_an_array_of_pairs() {
     let script = respond_with("new Response('ok', { headers: [['x-a', '1'], ['x-b', '2']] })");
 
     assert_eq!(
-        serve(&script).await.headers,
+        declared_headers(serve(&script).await),
         vec![
             ("x-a".to_string(), "1".to_string()),
             ("x-b".to_string(), "2".to_string()),
@@ -87,25 +108,22 @@ async fn test_headers_from_an_array_of_pairs() {
 }
 
 #[tokio::test]
-async fn test_headers_from_an_object_exposing_entries() {
+async fn test_headers_from_a_map() {
     let script = respond_with("new Response('ok', { headers: new Map([['x-a', '1']]) })");
 
     assert_eq!(
-        serve(&script).await.headers,
+        declared_headers(serve(&script).await),
         vec![("x-a".to_string(), "1".to_string())]
     );
 }
 
 #[tokio::test]
-async fn test_duplicate_header_names_are_all_kept() {
+async fn test_duplicate_header_names_are_combined() {
     let script = respond_with("new Response('ok', { headers: [['x-a', '1'], ['x-a', '2']] })");
 
     assert_eq!(
-        serve(&script).await.headers,
-        vec![
-            ("x-a".to_string(), "1".to_string()),
-            ("x-a".to_string(), "2".to_string()),
-        ]
+        declared_headers(serve(&script).await),
+        vec![("x-a".to_string(), "1, 2".to_string())]
     );
 }
 
@@ -115,7 +133,7 @@ async fn test_header_values_are_stringified() {
         respond_with("new Response('ok', { headers: { a: 1, b: null, c: undefined, d: true } })");
 
     assert_eq!(
-        serve(&script).await.headers,
+        declared_headers(serve(&script).await),
         vec![
             ("a".to_string(), "1".to_string()),
             ("b".to_string(), "null".to_string()),
@@ -126,32 +144,36 @@ async fn test_header_values_are_stringified() {
 }
 
 #[tokio::test]
-async fn test_empty_header_name_is_kept() {
-    let script = respond_with("new Response('ok', { headers: { '': 'v' } })");
+async fn test_a_header_name_that_is_not_a_token_is_rejected() {
+    for name in ["''", "'a b'", "'a:b'"] {
+        let script = respond_with(&format!(
+            "new Response('ok', {{ headers: {{ {name}: 'v' }} }})"
+        ));
 
-    assert_eq!(
-        serve(&script).await.headers,
-        vec![(String::new(), "v".to_string())]
-    );
-}
-
-#[tokio::test]
-async fn test_missing_headers_produce_none() {
-    for init in ["{}", "{ headers: null }", "{ headers: undefined }", "null"] {
-        let script = respond_with(&format!("new Response('ok', {init})"));
-
-        assert!(serve(&script).await.headers.is_empty(), "init {init}");
+        assert!(
+            exception_message(serve_err(&script).await).contains("TypeError"),
+            "name {name}"
+        );
     }
 }
 
 #[tokio::test]
-async fn test_a_header_pair_shorter_than_two_entries_yields_undefined() {
+async fn test_missing_headers_leave_only_the_content_type() {
+    for init in ["{}", "{ headers: null }", "{ headers: undefined }", "null"] {
+        let script = respond_with(&format!("new Response('ok', {init})"));
+
+        assert!(
+            declared_headers(serve(&script).await).is_empty(),
+            "init {init}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_a_header_pair_shorter_than_two_entries_is_rejected() {
     let script = respond_with("new Response('ok', { headers: [['x-a']] })");
 
-    assert_eq!(
-        serve(&script).await.headers,
-        vec![("x-a".to_string(), "undefined".to_string())]
-    );
+    assert!(exception_message(serve_err(&script).await).contains("TypeError"));
 }
 
 #[tokio::test]
@@ -169,7 +191,7 @@ async fn test_symbol_keyed_and_inherited_header_keys_are_skipped() {
     );
 
     assert_eq!(
-        serve(&script).await.headers,
+        declared_headers(serve(&script).await),
         vec![("own".to_string(), "2".to_string())]
     );
 }
@@ -180,16 +202,17 @@ async fn test_two_hundred_headers_all_arrive() {
         "new Response('ok', { headers: Array.from({ length: 200 }, (_, i) => ['x-h-' + i, String(i)]) })",
     );
 
-    let headers = serve(&script).await.headers;
+    let headers = declared_headers(serve(&script).await);
 
     assert_eq!(headers.len(), 200);
-    assert_eq!(headers[199], ("x-h-199".to_string(), "199".to_string()));
+    assert!(headers.contains(&("x-h-199".to_string(), "199".to_string())));
 }
 
 #[tokio::test]
 async fn test_throwing_header_iterator_surfaces_as_an_exception() {
-    let script =
-        respond_with("new Response('ok', { headers: { entries() { throw new Error('nope'); } } })");
+    let script = respond_with(
+        "new Response('ok', { headers: { [Symbol.iterator]() { throw new Error('nope'); } } })",
+    );
 
     assert!(exception_message(serve_err(&script).await).contains("nope"));
 }
@@ -246,7 +269,7 @@ async fn test_header_lone_surrogate_is_replaced() {
     let script = respond_with("new Response('ok', { headers: { 'x-s': '\\uDC00' } })");
 
     assert_eq!(
-        serve(&script).await.headers,
+        declared_headers(serve(&script).await),
         vec![("x-s".to_string(), "\u{fffd}".to_string())]
     );
 }

@@ -45,7 +45,13 @@ async fn test_async_handler() {
     assert_eq!(response.status, 201);
     assert_eq!(
         response.headers,
-        vec![("x-test".to_string(), "1".to_string())]
+        vec![
+            (
+                "content-type".to_string(),
+                "text/plain;charset=UTF-8".to_string()
+            ),
+            ("x-test".to_string(), "1".to_string()),
+        ]
     );
     assert_eq!(body_text(response).await, "async body");
 }
@@ -59,7 +65,7 @@ async fn test_request_marshaling() {
             event.respondWith(new Response(JSON.stringify({
                 method: request.method,
                 url: request.url,
-                contentType: request.headers['content-type'],
+                contentType: request.headers.get('content-type'),
                 body: await request.text(),
             })));
         });
