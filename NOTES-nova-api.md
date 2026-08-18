@@ -226,33 +226,76 @@ can only run at points where a `GcScope` is passed by value. Rules learned:
 
 ## Missing pieces relevant to openworkers (v1.0)
 
-1. **No resource limiting**: `AgentOptions` has no heap cap, no instruction
-   budget, no CPU-time hook. `RuntimeLimits` cannot be enforced. Interruption
-   of running JS (our `abort()`) is also impossible - there is no
-   V8-terminate-style API. Nearest possibility: a limit on the number of jobs
-   drained (implemented here as `MAX_JOBS_PER_DRAIN`).
-2. **No call-depth guard**: guest recursion runs on the host stack, so
-   `(function f() { return f(); })()` aborts the process with a Rust stack
-   overflow. Untestable from an integration test for that reason.
-3. **No promise inspection** (see above) - glue-code workaround required.
-4. **No web platform**: `console`, `setTimeout`, `fetch`, `URL`,
-   `TextEncoder/Decoder`, `Request`/`Response`, streams... all absent; the
-   `Worker` bootstrap in this repo ships a minimal JS polyfill layer instead.
-5. **`&'static dyn HostHooks`** forces leak-and-reclaim (or process-wide
-   statics) for per-worker host state.
-6. Engine-documented gaps (lib.rs docs): no sparse arrays, non-compliant
-   RegExp (no lookaheads/lookbehinds/backreferences), no Promise subclassing,
-   no WebAssembly, "acceptable, not fast" performance.
+Ordered by what blocks this host, and phrased so each can be filed as its own
+issue against `trynova/nova`. The first four are the ones that keep this
+backend from being production-usable; the rest are ergonomics.
+
+1. **No resource limiting.** `AgentOptions` (agent.rs:60) has three knobs -
+   `disable_gc`, `print_internals`, `no_block` - and none of them bound heap
+   or CPU. A multi-tenant host cannot honour a per-worker memory cap or an
+   instruction budget, so `RuntimeLimits` is accepted and ignored here. *Ask:*
+   a heap ceiling on `AgentOptions`, and an interrupt-check callback the
+   embedder can install (V8's `SetInterruptCallback` / `TerminateExecution`,
+   Boa's job budget).
+2. **No way to interrupt running JS.** `while (true) {}` in a guest owns the
+   thread forever; `abort()` can only refuse the *next* `exec`. Same root
+   cause as 1, but worth filing apart: a host can live with an unbounded heap
+   far more easily than with an unkillable request.
+3. **No call-depth guard.** Guest recursion runs on the host stack with no
+   limit, so `(function f() { return f(); })()` overflows the Rust stack and
+   aborts the process. It cannot even be covered by a test here, since the
+   test process dies with it. *Ask:* a configurable max call depth throwing
+   `RangeError`, as every other engine does.
+4. **No promise inspection or construction from Rust.**
+   `Promise::try_get_result` and `PromiseState` are `pub(crate)`
+   (promise.rs:84, promise/data.rs:19), and there is no public
+   `Promise::with_resolvers`. Every host operation that resolves
+   asynchronously (`fetch`, timers, KV reads) therefore needs JS glue holding
+   a resolve/reject pair, plus a native function to carry the value back. This
+   is what stands between this backend and guest-visible `fetch()`. *Ask:*
+   expose `PromiseState`/`try_get_result` and a `Promise::new_with_resolvers`
+   equivalent for embedders.
+5. **`GcAgent::run_job` panics on realm-less jobs.** It does
+   `job.realm.take().unwrap()` (agent.rs:1046), but nova builds jobs with
+   `realm: None` for `PromiseReactionHandler::PromiseGroup` (`Promise.all`,
+   `race`, `any`, `allSettled`) and async iteration (promise_jobs.rs:344-352).
+   Guest code calling any combinator kills the process. `Job::run` handles it
+   correctly, so this is a bug in the convenience wrapper, not a design gap.
+6. **`Atomics.waitAsync` leaks a parked thread with no way to cancel it.**
+   `WaitAsyncJob::run` joins the waiter thread (atomics_object.rs:1663); with
+   nobody to notify, the job never becomes `is_finished()` and the embedder
+   can only drop it, leaking the thread for the process lifetime. *Ask:* a
+   cancel/abort entry point on the job, or a documented embedder-side timeout.
+7. **`&'static dyn HostHooks`** forces per-worker host state to be leaked and
+   manually reclaimed after the agent is dropped. *Ask:* accept an `Rc`/`Arc`,
+   or tie the hooks lifetime to the agent.
+8. **No timer API surface.** `enqueue_timeout_job(job, ms)` exists, but the
+   embedder cannot *create* a job, so `setTimeout` cannot be built on it -
+   only on a JS-side promise, which loses the delay. Related to 4.
+9. **No web platform** (expected for an engine, listed for completeness):
+   `console`, `fetch`, `URL`, `TextEncoder/Decoder`, `Request`/`Response`,
+   streams are all absent; the bootstrap here ships a minimal polyfill layer.
+10. Engine-documented gaps (lib.rs docs): no sparse arrays, non-compliant
+    RegExp (no lookaheads/lookbehinds/backreferences), no Promise subclassing,
+    no WebAssembly, "acceptable, not fast" performance.
+11. **Lockfile hazard, not an API gap:** `temporal_rs` 0.1.2 uses icu4x
+    `unstable` APIs and breaks against icu 2.3, so a plain `cargo update`
+    breaks the build. Worth an upstream pin.
 
 ## Verdict for the openworkers use case
 
-A synchronous fetch handler contract (guest returns a Response without
-awaiting host I/O) is fully implementable today: script eval, host functions,
-JSON marshaling and embedder-driven microtask draining all work. Async host
-operations (guest `await fetch(...)`) are also architecturally possible - the
-job queue is embedder-controlled, so the drain loop can interleave resolving
-host futures with `run_job` - but each pending host operation needs a
-JS-side promise wired to host functions (`resolve`/`reject` handed out
-through glue), since Rust cannot create/settle a `Promise` via public API
-either. That plumbing (plus `OperationsHandler` integration) is the natural
-next step after this v0.
+Handler contracts that need no host I/O - a fetch handler returning a
+Response, a task handler returning its result - are fully implementable
+today: script eval, host functions, JSON marshaling and embedder-driven
+microtask draining all work, and both are implemented here. Async host
+operations (guest `await fetch(...)`) are architecturally possible - the job
+queue is embedder-controlled, so the drain loop can interleave resolving host
+futures with `run_job` - but each pending operation needs a JS-side promise
+wired to host functions (`resolve`/`reject` handed out through glue), since
+Rust cannot create or settle a `Promise` via public API. That plumbing (plus
+`OperationsHandler` integration) is the natural next step.
+
+What keeps this off production is not the missing web platform, which is
+embedder work, but items 1-3 above: an untrusted guest can exhaust memory,
+spin forever, or abort the whole process by recursing. None has a workaround
+at the embedding layer.

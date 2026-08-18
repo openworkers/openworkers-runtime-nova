@@ -85,6 +85,20 @@ value. A value carrying a boolean `success` is taken as a whole
 awaited before the result is delivered, and a rejected one does not sink a
 result already produced.
 
+## Performance
+
+`cargo run --release --example timings` builds 200 workers and runs one task
+on each. On an M-series laptop under load, for a one-line task handler:
+
+| Step | median |
+| --- | --- |
+| `Worker::new` (bootstrap + guest script eval) | 0.16 ms |
+| `exec(Event::Task)` on a warm worker | 0.05 ms |
+
+Nova's own README calls the engine "acceptable, but not fast"; that shows up
+in guest compute, not in startup, where having no snapshot to map and no C++
+heap to build makes it the cheapest of the backends measured so far.
+
 ## Known limitations (v0)
 
 - **No host I/O from JS**: no `fetch()`, no timers, no
