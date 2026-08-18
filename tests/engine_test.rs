@@ -102,7 +102,6 @@ async fn test_web_platform_globals_are_absent() {
     let missing = [
         "setTimeout",
         "setInterval",
-        "queueMicrotask",
         "fetch",
         "URL",
         "TextEncoder",

@@ -131,6 +131,21 @@
     debug: makeLog('debug'),
   };
 
+  // Nothing to fire an error event on, so a throwing callback is logged.
+  globalThis.queueMicrotask = function (callback) {
+    if (typeof callback !== 'function') {
+      throw new TypeError('queueMicrotask requires a function');
+    }
+
+    Promise.resolve().then(function () {
+      try {
+        callback();
+      } catch (error) {
+        console.error('uncaught exception in queueMicrotask: ' + String(error));
+      }
+    });
+  };
+
   globalThis.addEventListener = function (type, handler) {
     if (type === 'fetch') {
       fetchHandlers.push(handler);

@@ -279,3 +279,43 @@ async fn test_the_worker_serves_again_after_the_job_cap_fires() {
     );
     assert_eq!(body_text(send(&mut worker, get(URL)).await).await, "ok");
 }
+
+#[tokio::test]
+async fn test_queue_microtask_runs_before_the_response_settles() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            const order = [];
+
+            queueMicrotask(() => order.push('micro'));
+            Promise.resolve().then(() => order.push('promise'));
+
+            event.respondWith(
+                Promise.resolve().then(() => Promise.resolve()).then(
+                    () => new Response(order.join(','))
+                )
+            );
+        });
+    "#;
+
+    assert_eq!(serve_body(script).await, "micro,promise");
+}
+
+#[tokio::test]
+async fn test_a_throwing_microtask_does_not_sink_the_response() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            queueMicrotask(() => { throw new Error('boom'); });
+
+            event.respondWith(new Response('served'));
+        });
+    "#;
+
+    assert_eq!(serve_body(script).await, "served");
+}
+
+#[tokio::test]
+async fn test_queue_microtask_rejects_a_non_callable() {
+    let script = "addEventListener('fetch', () => queueMicrotask(42));";
+
+    assert!(exception_message(serve_err(script).await).contains("TypeError"));
+}
