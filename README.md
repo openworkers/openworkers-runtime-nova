@@ -42,7 +42,10 @@ OpenWorkers runtime backend for the [Nova JavaScript engine](https://trynova.dev
   `Response`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`,
   `queueMicrotask`, `crypto.getRandomValues`, `crypto.randomUUID`,
   `DOMException`, `console`. `URL` parsing and its setters run in the host
-  through the `url` crate; the rest is JS in `src/*.js`.
+  through the `url` crate; the rest is JS in `src/*.js`. `Headers` iterates
+  sorted, as the Fetch standard prescribes, but the response goes on the
+  wire in the order the handler set it, which is what the V8, JSC and Boa
+  backends send and what an HTTP header list is.
 - **Handler shapes**: `addEventListener('fetch'|'task')` and the module
   convention `globalThis.default = { fetch(request, env, ctx), task(...) }`.
   A listener wins over the module export.
@@ -166,9 +169,12 @@ costs about what V8 charges; guest compute is where the engine's own
   handler returning; later calls lose the race with the dispatch glue.
   Same rule for a task, where losing the race means the handler's return
   value is delivered instead.
-- The glue is not isolated from the guest: `__ow_dispatch` and the
-  `__ow_native_*` builtins are ordinary globals, and replacing an
-  intrinsic the glue uses (`JSON.stringify`, ...) breaks dispatch.
+- The glue is not isolated from the guest: `__ow_dispatch`,
+  `__ow_headers_to_wire` and the `__ow_native_*` builtins are ordinary
+  globals, and replacing an intrinsic the glue uses (`JSON.stringify`,
+  ...) breaks dispatch. A response can only reach the caller it belongs
+  to, though: `__ow_dispatch` gets a dispatch id and the host drops any
+  `__ow_native_respond` that does not echo the one in flight.
 - `Atomics.waitAsync` that nobody notifies ends the request with
   `MaxIterationsReached` and leaks its parked waiter thread; nova offers
   no way to cancel it.
