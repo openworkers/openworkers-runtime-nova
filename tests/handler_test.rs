@@ -8,6 +8,7 @@ use common::send;
 use common::serve_body;
 use common::serve_err;
 use common::worker;
+use common::worker_err;
 
 #[tokio::test]
 async fn test_every_registered_handler_runs_and_the_last_response_wins() {
@@ -223,7 +224,7 @@ async fn test_responding_on_a_previous_request_event_has_no_effect() {
 #[tokio::test]
 async fn test_remove_event_listener_is_not_provided() {
     let script = "removeEventListener('fetch', () => {});";
-    let reason = common::worker_err(script).await;
+    let reason = worker_err(script).await;
 
     assert!(exception_message(reason).contains("removeEventListener"));
 }
@@ -249,7 +250,7 @@ async fn test_a_module_fetch_export_serves_the_request() {
         };
     "#;
 
-    assert_eq!(common::serve_body(script).await, "module /");
+    assert_eq!(serve_body(script).await, "module /");
 }
 
 #[tokio::test]
@@ -260,14 +261,14 @@ async fn test_a_fetch_listener_wins_over_the_module_export() {
         addEventListener('fetch', (event) => event.respondWith(new Response('listener')));
     "#;
 
-    assert_eq!(common::serve_body(script).await, "listener");
+    assert_eq!(serve_body(script).await, "listener");
 }
 
 #[tokio::test]
 async fn test_a_module_fetch_that_returns_nothing_fails() {
     let script = "globalThis.default = { fetch() {} };";
 
-    assert!(common::exception_message(common::serve_err(script).await).contains("no response"),);
+    assert!(exception_message(serve_err(script).await).contains("no response"));
 }
 
 #[tokio::test]
@@ -285,5 +286,5 @@ async fn test_wait_until_promises_settle_before_the_response_is_delivered() {
         };
     "#;
 
-    assert_eq!(common::serve_body(script).await, "served 1");
+    assert_eq!(serve_body(script).await, "served 1");
 }
