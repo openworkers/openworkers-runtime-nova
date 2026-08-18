@@ -232,6 +232,25 @@ async fn test_a_self_resolving_thenable_hits_the_job_cap() {
     );
 }
 
+/// One promise link is one job, so 10 000 links is exactly the cap.
+#[tokio::test]
+async fn test_a_chain_ending_exactly_at_the_job_cap_completes() {
+    let script = |links: usize| {
+        format!(
+            "let n = 0; \
+             let chain = Promise.resolve(); \
+             for (let i = 0; i < {links}; i++) {{ chain = chain.then(() => {{ n += 1; }}); }} \
+             addEventListener('fetch', (event) => event.respondWith(new Response(String(n))));"
+        )
+    };
+
+    assert_eq!(serve_body(&script(10_000)).await, "10000");
+    assert_eq!(
+        worker_err(&script(10_001)).await,
+        TerminationReason::MaxIterationsReached
+    );
+}
+
 #[tokio::test]
 async fn test_an_endless_microtask_loop_at_eval_time_fails_initialization() {
     let script = "function spin() { Promise.resolve().then(spin); } spin();";

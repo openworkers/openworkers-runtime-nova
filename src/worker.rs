@@ -181,6 +181,11 @@ impl Worker {
             }
         }
 
+        // Finishing on the last job of the budget is still finishing.
+        if self.hooks().jobs.borrow().is_empty() {
+            return Ok(());
+        }
+
         // Leftover jobs would spend the next request's budget on this one.
         self.hooks().jobs.borrow_mut().clear();
 
