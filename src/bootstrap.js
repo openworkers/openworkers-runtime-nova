@@ -142,6 +142,7 @@
   globalThis.__ow_dispatch = function (requestJson) {
     const data = JSON.parse(requestJson);
     const request = __ow_request_from_wire(data);
+    const background = [];
     const event = {
       type: 'fetch',
       request: request,
@@ -149,26 +150,48 @@
       respondWith(response) {
         this._response = response;
       },
+      waitUntil(promise) {
+        background.push(promise);
+      },
     };
 
+    const module = globalThis.default;
+    const hasModuleFetch = module && typeof module.fetch === 'function';
+
     settle((async function () {
-      if (fetchHandlers.length === 0) {
+      if (fetchHandlers.length === 0 && !hasModuleFetch) {
         throw new Error('no fetch handler registered');
       }
 
-      for (const handler of fetchHandlers) {
-        await handler(event);
+      let returned;
+
+      if (fetchHandlers.length > 0) {
+        for (const handler of fetchHandlers) {
+          await handler(event);
+        }
+      } else {
+        returned = await module.fetch(request, globalThis.env, {
+          waitUntil: event.waitUntil,
+          passThroughOnException() {},
+        });
       }
 
-      const response = await event._response;
+      const response = await (event._response === null ? returned : event._response);
 
       if (!response) {
-        throw new Error('fetch handler did not call respondWith()');
+        throw new Error(
+          fetchHandlers.length > 0
+            ? 'fetch handler did not call respondWith()'
+            : 'fetch handler returned no response'
+        );
       }
 
       // A duck-typed response is still accepted, so read a body either way.
       const raw =
         typeof response.text === 'function' ? await response.text() : response.body;
+
+      // A rejected background promise must not sink a response already produced.
+      await Promise.all(background).catch(function () {});
 
       return {
         status: wireStatus(response.status),

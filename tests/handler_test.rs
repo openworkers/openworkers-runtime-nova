@@ -238,3 +238,52 @@ async fn test_the_event_carries_its_type_and_request() {
 
     assert_eq!(serve_body(script).await, "fetch GET");
 }
+
+#[tokio::test]
+async fn test_a_module_fetch_export_serves_the_request() {
+    let script = r#"
+        globalThis.default = {
+            async fetch(request) {
+                return new Response('module ' + new URL(request.url).pathname);
+            },
+        };
+    "#;
+
+    assert_eq!(common::serve_body(script).await, "module /");
+}
+
+#[tokio::test]
+async fn test_a_fetch_listener_wins_over_the_module_export() {
+    let script = r#"
+        globalThis.default = { fetch: () => new Response('module') };
+
+        addEventListener('fetch', (event) => event.respondWith(new Response('listener')));
+    "#;
+
+    assert_eq!(common::serve_body(script).await, "listener");
+}
+
+#[tokio::test]
+async fn test_a_module_fetch_that_returns_nothing_fails() {
+    let script = "globalThis.default = { fetch() {} };";
+
+    assert!(common::exception_message(common::serve_err(script).await).contains("no response"),);
+}
+
+#[tokio::test]
+async fn test_wait_until_promises_settle_before_the_response_is_delivered() {
+    let script = r#"
+        globalThis.default = {
+            fetch(request, env, ctx) {
+                const done = [];
+
+                ctx.waitUntil(Promise.resolve().then(() => done.push('background')));
+                ctx.waitUntil(Promise.reject(new Error('ignored')));
+
+                return Promise.resolve().then(() => new Response('served ' + done.length));
+            },
+        };
+    "#;
+
+    assert_eq!(common::serve_body(script).await, "served 1");
+}
