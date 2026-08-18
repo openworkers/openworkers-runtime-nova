@@ -63,8 +63,7 @@ struct HostSlots {
     outcome: RefCell<Option<String>>,
 }
 
-/// Per-worker host hooks: Nova hands every job to the embedder, so queue
-/// them for `Worker::drain_jobs`.
+/// Nova hands every job to the embedder, so each worker keeps its own queue.
 #[derive(Default)]
 struct WorkerHostHooks {
     jobs: RefCell<VecDeque<Job>>,
@@ -128,8 +127,6 @@ impl Worker {
         unsafe { self.hooks.as_ref() }
     }
 
-    /// Evaluate a script in the worker's realm, mapping a thrown value to its
-    /// display string.
     fn eval(&mut self, source: &str) -> Result<(), String> {
         self.agent.run_in_realm(&self.realm, |agent, mut gc| {
             let source = JsString::from_str(agent, source, gc.nogc());
@@ -149,8 +146,8 @@ impl Worker {
         })
     }
 
-    /// Run queued jobs until the queue is empty. Promise resolution only
-    /// happens here: Nova gives every reaction job to our host hooks.
+    /// Promise resolution only happens here: nova hands every reaction job to
+    /// the host hooks instead of running it itself.
     fn drain_jobs(&mut self) -> Result<(), TerminationReason> {
         for _ in 0..MAX_JOBS_PER_DRAIN {
             let job = self.hooks().jobs.borrow_mut().pop_front();
@@ -186,7 +183,6 @@ impl Worker {
         Err(TerminationReason::MaxIterationsReached)
     }
 
-    /// Hand one event to its JS dispatcher and run the queue it leaves behind.
     fn dispatch(
         &mut self,
         dispatcher: &str,
@@ -204,7 +200,6 @@ impl Worker {
         self.drain_jobs()
     }
 
-    /// Read back what the dispatcher delivered for the event just drained.
     fn take_outcome<T: serde::de::DeserializeOwned>(
         &self,
         kind: &str,
