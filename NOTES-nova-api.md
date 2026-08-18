@@ -166,6 +166,23 @@ while let Some(job) = hooks.jobs.borrow_mut().pop_front() {
 `GcAgent::run_job` (agent.rs:812) must be called OUTSIDE `run_in_realm`
 (both assert an empty execution-context stack); the `Job` carries its realm.
 
+### Trap: `GcAgent::run_job` panics on realm-less jobs
+
+`GcAgent::run_job` does `job.realm.take().unwrap()` (agent.rs:1046), but nova
+builds jobs with `realm: None` whenever the reaction handler has no function
+realm - `PromiseReactionHandler::PromiseGroup` (`Promise.all`, `race`, `any`,
+`allSettled`) and the async-iteration handlers (promise_jobs.rs:344-352). Guest
+code calling any of them aborts the process. The public `Job::run(agent, gc)`
+handles `realm: None` correctly, so the drain loop here calls it inside
+`run_in_realm` instead.
+
+### Trap: unfinished jobs block the thread
+
+`Atomics.waitAsync` spawns a waiter thread and `WaitAsyncJob::run` joins it
+(atomics_object.rs:1663); with no timeout that join never returns. `Job::is_finished()`
+exists to test this before running - a drain loop that ignores it hangs forever
+on guest code that waits on a value nobody notifies.
+
 ### Gap: no public way to inspect a settled Promise
 
 `Promise::try_get_result` and the `PromiseState` enum are `pub(crate)`
@@ -214,13 +231,16 @@ can only run at points where a `GcScope` is passed by value. Rules learned:
    of running JS (our `abort()`) is also impossible - there is no
    V8-terminate-style API. Nearest possibility: a limit on the number of jobs
    drained (implemented here as `MAX_JOBS_PER_DRAIN`).
-2. **No promise inspection** (see above) - glue-code workaround required.
-3. **No web platform**: `console`, `setTimeout`, `fetch`, `URL`,
+2. **No call-depth guard**: guest recursion runs on the host stack, so
+   `(function f() { return f(); })()` aborts the process with a Rust stack
+   overflow. Untestable from an integration test for that reason.
+3. **No promise inspection** (see above) - glue-code workaround required.
+4. **No web platform**: `console`, `setTimeout`, `fetch`, `URL`,
    `TextEncoder/Decoder`, `Request`/`Response`, streams... all absent; the
    `Worker` bootstrap in this repo ships a minimal JS polyfill layer instead.
-4. **`&'static dyn HostHooks`** forces leak-and-reclaim (or process-wide
+5. **`&'static dyn HostHooks`** forces leak-and-reclaim (or process-wide
    statics) for per-worker host state.
-5. Engine-documented gaps (lib.rs docs): no sparse arrays, non-compliant
+6. Engine-documented gaps (lib.rs docs): no sparse arrays, non-compliant
    RegExp (no lookaheads/lookbehinds/backreferences), no Promise subclassing,
    no WebAssembly, "acceptable, not fast" performance.
 

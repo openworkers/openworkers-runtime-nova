@@ -60,13 +60,28 @@ addEventListener('fetch', (event) => {
 - **`RuntimeLimits` unenforced**: nova_vm 1.0 has no heap cap,
   instruction budget or interrupt API. `abort()` only rejects future
   `exec()` calls. The only guard is a cap on jobs per drain.
+- **Unbounded guest recursion aborts the process**: nova_vm 1.0 runs the
+  guest call stack on the host stack with no depth guard, so
+  `(function f() { return f(); })()` kills the runner.
 - **Task events** (`Event::Task`) are not supported yet.
 - **`Script.env` and bindings are not exposed to the guest yet** (the
   guest-facing convention is still to be settled platform-wide).
 - Bodies are UTF-8 text only (request bodies lossy-decoded, response
-  bodies are JS strings); streaming bodies are rejected.
+  bodies and headers lose lone surrogates to U+FFFD); streaming bodies
+  are rejected.
 - Minimal `Request`/`Response` polyfills, not the WHATWG classes
-  (headers are plain objects; no `Headers`, `URL`, streams, ...).
+  (headers are plain objects; no `Headers`, `URL`, streams,
+  `removeEventListener`, listener objects with `handleEvent`, ...). The
+  response status must be an integer in 100-599, so anything that is not
+  response-shaped is rejected with a `RangeError`.
+- `respondWith` only counts if it runs within one microtask turn of the
+  handler returning; later calls lose the race with the dispatch glue.
+- The glue is not isolated from the guest: `__ow_dispatch` and the
+  `__ow_native_*` builtins are ordinary globals, and replacing an
+  intrinsic the glue uses (`JSON.stringify`, ...) breaks dispatch.
+- `Atomics.waitAsync` that nobody notifies ends the request with
+  `MaxIterationsReached` and leaks its parked waiter thread; nova offers
+  no way to cancel it.
 
 ## Next steps
 
