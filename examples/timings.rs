@@ -8,6 +8,10 @@ use openworkers_core::Worker as _;
 
 use openworkers_runtime_nova::Worker;
 
+mod common;
+
+use common::report;
+
 const SCRIPT: &str =
     "globalThis.default = { task: (event) => ({ doubled: event.payload.n * 2 }) };";
 
@@ -36,17 +40,4 @@ async fn main() {
 
     report("Worker::new (bootstrap + script eval)", &mut init);
     report("exec(Event::Task) on a warm worker", &mut exec);
-}
-
-fn report(label: &str, samples: &mut [f64]) {
-    samples.sort_by(f64::total_cmp);
-
-    let mean = samples.iter().sum::<f64>() / samples.len() as f64;
-
-    println!(
-        "{label:<38} min {:7.3} ms   median {:7.3} ms   mean {mean:7.3} ms   (n={})",
-        samples[0],
-        samples[samples.len() / 2],
-        samples.len()
-    );
 }
