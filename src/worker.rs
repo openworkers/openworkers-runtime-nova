@@ -146,19 +146,29 @@ impl Worker {
                 return Ok(());
             };
 
-            self.agent.run_job(job, |agent, result, gc| {
-                if let Err(e) = result {
-                    let message = e
-                        .unbind()
-                        .to_string(agent, gc)
-                        .to_string_lossy(agent)
-                        .into_owned();
+            // Running an unfinished Atomics.waitAsync job blocks on a thread join.
+            if !job.is_finished() {
+                self.hooks().jobs.borrow_mut().push_back(job);
+                continue;
+            }
 
-                    // Like an unhandled rejection: report, don't kill the worker.
-                    eprintln!("uncaught error in job: {message}");
+            // Not GcAgent::run_job: it unwraps the job's realm, which nova
+            // leaves empty for promise combinators and async iteration.
+            let error = self.agent.run_in_realm(&self.realm, |agent, mut gc| {
+                match job.run(agent, gc.reborrow()).unbind() {
+                    Ok(()) => None,
+                    Err(e) => Some(e.to_string(agent, gc).to_string_lossy(agent).into_owned()),
                 }
             });
+
+            if let Some(message) = error {
+                // Like an unhandled rejection: report, don't kill the worker.
+                eprintln!("uncaught error in job: {message}");
+            }
         }
+
+        // Leftover jobs would spend the next request's budget on this one.
+        self.hooks().jobs.borrow_mut().clear();
 
         Err(TerminationReason::MaxIterationsReached)
     }
