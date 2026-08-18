@@ -3,11 +3,31 @@
 (function () {
   'use strict';
 
-  const handlers = [];
+  const fetchHandlers = [];
+  const taskHandlers = [];
 
   // Lone surrogates reach the host as \uXXXX escapes that its JSON parser rejects.
   function wireText(value) {
     return String(value).toWellFormed();
+  }
+
+  // Property names never reach a JSON.stringify replacer, so rebuild objects.
+  function wireJson(_key, value) {
+    if (typeof value === 'string') {
+      return wireText(value);
+    }
+
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return value;
+    }
+
+    const clean = {};
+
+    for (const key of Object.keys(value)) {
+      clean[wireText(key)] = value[key];
+    }
+
+    return clean;
   }
 
   // Checked at the wire boundary, so duck-typed responses cannot skip it.
@@ -113,9 +133,25 @@
 
   globalThis.addEventListener = function (type, handler) {
     if (type === 'fetch') {
-      handlers.push(handler);
+      fetchHandlers.push(handler);
+    } else if (type === 'task') {
+      taskHandlers.push(handler);
     }
   };
+
+  // The host tells an event outcome from a failed dispatch by the key it gets.
+  function settle(promise) {
+    promise.then(
+      function (value) {
+        __ow_native_respond(JSON.stringify({ value: value }, wireJson));
+      },
+      function (error) {
+        const message =
+          error instanceof Error && error.stack ? error.stack : String(error);
+        __ow_native_respond(JSON.stringify({ error: wireText(message) }));
+      }
+    );
+  }
 
   globalThis.__ow_dispatch = function (requestJson) {
     const data = JSON.parse(requestJson);
@@ -133,12 +169,12 @@
       },
     };
 
-    (async function () {
-      if (handlers.length === 0) {
+    settle((async function () {
+      if (fetchHandlers.length === 0) {
         throw new Error('no fetch handler registered');
       }
 
-      for (const handler of handlers) {
+      for (const handler of fetchHandlers) {
         await handler(event);
       }
 
@@ -156,15 +192,77 @@
             ? ''
             : wireText(response.body),
       };
-    })().then(
-      function (response) {
-        __ow_native_respond(JSON.stringify({ response: response }));
+    })());
+  };
+
+  function toTaskResult(value) {
+    if (value !== null && typeof value === 'object' && 'success' in value) {
+      return {
+        success: value.success !== false,
+        data: value.data,
+        error: value.error,
+      };
+    }
+
+    return { success: true, data: value };
+  }
+
+  globalThis.__ow_dispatch_task = function (initJson) {
+    const init = JSON.parse(initJson);
+    const background = [];
+    let responded = false;
+    let responseValue;
+
+    const event = {
+      type: 'task',
+      taskId: init.taskId,
+      payload: init.payload,
+      source: init.source,
+      attempt: init.attempt,
+      scheduledTime: init.scheduledTime,
+      respondWith(value) {
+        responded = true;
+        responseValue = value;
       },
-      function (error) {
-        const message =
-          error instanceof Error && error.stack ? error.stack : String(error);
-        __ow_native_respond(JSON.stringify({ error: wireText(message) }));
+      waitUntil(promise) {
+        background.push(promise);
+      },
+    };
+
+    const module = globalThis.default;
+    const hasModuleTask = module && typeof module.task === 'function';
+
+    settle((async function () {
+      if (taskHandlers.length === 0 && !hasModuleTask) {
+        throw new Error('no task handler registered');
       }
-    );
+
+      // A task that throws is a failed task, not a failed dispatch.
+      try {
+        let returned;
+
+        if (taskHandlers.length > 0) {
+          for (const handler of taskHandlers) {
+            returned = await handler(event);
+          }
+        } else {
+          returned = await module.task(event, globalThis.env, {
+            waitUntil: event.waitUntil,
+          });
+        }
+
+        const result = toTaskResult(responded ? await responseValue : returned);
+
+        // A rejected background promise must not sink a result already produced.
+        await Promise.all(background).catch(function () {});
+
+        return result;
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    })());
   };
 })();

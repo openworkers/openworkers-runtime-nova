@@ -1,6 +1,6 @@
 //! OpenWorkers runtime backed by the Nova JavaScript engine.
 //!
-//! v0 scope: synchronous fetch handlers only (no host I/O from JS yet).
+//! v0 scope: fetch and task handlers that need no host I/O from JS.
 //! See NOTES-nova-api.md for the engine reconnaissance and README.md for
 //! the current status.
 

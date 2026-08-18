@@ -156,25 +156,19 @@ async fn test_an_already_taken_fetch_init_is_rejected() {
 }
 
 #[tokio::test]
-async fn test_task_events_are_rejected_and_reported_to_the_caller() {
+async fn test_an_already_taken_task_init_is_rejected() {
     let mut worker = worker(OK).await;
 
-    let (task, rx) = Event::invoke("task-1".to_string(), None, None);
+    let (mut task, _rx) = Event::invoke("task-1".to_string(), None, None);
+
+    if let Event::Task(init) = &mut task {
+        init.take();
+    }
 
     assert!(matches!(
         worker.exec(task).await.expect_err("exec should fail"),
         TerminationReason::Other(_)
     ));
-
-    let result = rx.await.expect("should receive task result");
-
-    assert!(!result.success);
-    assert!(
-        result
-            .error
-            .expect("should carry an error")
-            .contains("task")
-    );
 }
 
 #[tokio::test]

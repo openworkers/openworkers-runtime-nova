@@ -37,7 +37,9 @@ use openworkers_core::RequestBody;
 use openworkers_core::ResponseBody;
 use openworkers_core::RuntimeLimits;
 use openworkers_core::Script;
+use openworkers_core::TaskInit;
 use openworkers_core::TaskResult;
+use openworkers_core::TaskSource;
 use openworkers_core::TerminationReason;
 
 const BOOTSTRAP_JS: &str = include_str!("bootstrap.js");
@@ -49,7 +51,7 @@ const MAX_JOBS_PER_DRAIN: usize = 10_000;
 /// State the bootstrap glue hands back through the `__ow_native_*` builtins.
 #[derive(Debug, Default)]
 struct HostSlots {
-    response: RefCell<Option<String>>,
+    outcome: RefCell<Option<String>>,
 }
 
 /// Per-worker host hooks: Nova hands every job to the embedder, so queue
@@ -88,11 +90,12 @@ impl HostHooks for WorkerHostHooks {
     }
 }
 
-/// Outcome of `__ow_dispatch`, delivered as JSON by `__ow_native_respond`.
+/// What `__ow_native_respond` delivered: the event's outcome, or a dispatch
+/// that never got that far.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum DispatchOutcome {
-    Response { response: DispatchResponse },
+enum DispatchOutcome<T> {
+    Value { value: T },
     Error { error: String },
 }
 
@@ -174,6 +177,50 @@ impl Worker {
         Err(TerminationReason::MaxIterationsReached)
     }
 
+    /// Hand one event to its JS dispatcher and run the queue it leaves behind.
+    fn dispatch(
+        &mut self,
+        dispatcher: &str,
+        event: &serde_json::Value,
+    ) -> Result<(), TerminationReason> {
+        // Double encoding turns the JSON text into a JS string literal.
+        let literal = serde_json::Value::String(event.to_string()).to_string();
+
+        // Drop any stale payload from a previous dispatch.
+        self.hooks().slots.outcome.borrow_mut().take();
+
+        self.eval(&format!("{dispatcher}({literal});"))
+            .map_err(TerminationReason::Exception)?;
+
+        self.drain_jobs()
+    }
+
+    /// Read back what the dispatcher delivered for the event just drained.
+    fn take_outcome<T: serde::de::DeserializeOwned>(
+        &self,
+        kind: &str,
+    ) -> Result<T, TerminationReason> {
+        let payload = self
+            .hooks()
+            .slots
+            .outcome
+            .borrow_mut()
+            .take()
+            .ok_or_else(|| {
+                TerminationReason::Exception(format!(
+                    "{kind} handler did not settle: async host operations are not supported yet"
+                ))
+            })?;
+
+        let outcome: DispatchOutcome<T> = serde_json::from_str(&payload)
+            .map_err(|e| TerminationReason::Other(format!("invalid dispatch payload: {e}")))?;
+
+        match outcome {
+            DispatchOutcome::Value { value } => Ok(value),
+            DispatchOutcome::Error { error } => Err(TerminationReason::Exception(error)),
+        }
+    }
+
     fn handle_fetch(&mut self, req: HttpRequest) -> Result<HttpResponse, TerminationReason> {
         let body = match req.body {
             RequestBody::None => None,
@@ -185,48 +232,41 @@ impl Worker {
             }
         };
 
-        let request_json = serde_json::json!({
+        let request = serde_json::json!({
             "method": req.method.as_str(),
             "url": req.url,
             "headers": req.headers,
             "body": body,
         });
 
-        // Double encoding turns the JSON text into a JS string literal.
-        let literal = serde_json::Value::String(request_json.to_string()).to_string();
+        self.dispatch("__ow_dispatch", &request)?;
 
-        // Drop any stale payload from a previous dispatch.
-        self.hooks().slots.response.borrow_mut().take();
+        let response: DispatchResponse = self.take_outcome("fetch")?;
 
-        self.eval(&format!("__ow_dispatch({literal});"))
-            .map_err(TerminationReason::Exception)?;
+        Ok(HttpResponse {
+            status: response.status,
+            headers: response.headers,
+            body: ResponseBody::Bytes(Bytes::from(response.body)),
+        })
+    }
 
-        self.drain_jobs()?;
+    fn handle_task(&mut self, init: &TaskInit) -> Result<TaskResult, TerminationReason> {
+        let scheduled_time = match &init.source {
+            Some(TaskSource::Schedule { time }) => Some(*time),
+            _ => None,
+        };
 
-        let payload = self
-            .hooks()
-            .slots
-            .response
-            .borrow_mut()
-            .take()
-            .ok_or_else(|| {
-                TerminationReason::Exception(
-                    "fetch handler did not settle: async host operations are not supported yet"
-                        .to_string(),
-                )
-            })?;
+        let event = serde_json::json!({
+            "taskId": init.task_id,
+            "payload": init.payload,
+            "source": init.source,
+            "attempt": init.attempt,
+            "scheduledTime": scheduled_time,
+        });
 
-        let outcome: DispatchOutcome = serde_json::from_str(&payload)
-            .map_err(|e| TerminationReason::Other(format!("invalid dispatch payload: {e}")))?;
+        self.dispatch("__ow_dispatch_task", &event)?;
 
-        match outcome {
-            DispatchOutcome::Response { response } => Ok(HttpResponse {
-                status: response.status,
-                headers: response.headers,
-                body: ResponseBody::Bytes(Bytes::from(response.body)),
-            }),
-            DispatchOutcome::Error { error } => Err(TerminationReason::Exception(error)),
-        }
+        self.take_outcome("task")
     }
 }
 
@@ -301,12 +341,19 @@ impl openworkers_core::Worker for Worker {
                 let init = init.take().ok_or_else(|| {
                     TerminationReason::Other("TaskInit already taken".to_string())
                 })?;
-                let reason = TerminationReason::Other(
-                    "task events are not supported by the Nova runtime yet".to_string(),
-                );
-                let _ = init.res_tx.send(TaskResult::err(reason.description()));
 
-                Err(reason)
+                match self.handle_task(&init) {
+                    Ok(result) => {
+                        let _ = init.res_tx.send(result);
+
+                        Ok(())
+                    }
+                    Err(reason) => {
+                        let _ = init.res_tx.send(TaskResult::err(reason.description()));
+
+                        Err(reason)
+                    }
+                }
             }
         }
     }
@@ -387,7 +434,7 @@ fn native_respond<'gc>(
         .to_string_lossy(agent)
         .into_owned();
 
-    *host_slots(agent).response.borrow_mut() = Some(payload);
+    *host_slots(agent).outcome.borrow_mut() = Some(payload);
 
     Ok(Value::Undefined)
 }
