@@ -1,8 +1,8 @@
 # openworkers-runtime-nova
 
 > **Status: v0 working.** Synchronous `fetch` handlers run end-to-end
-> against `openworkers-core` v0.14 (9 integration tests passing). No host
-> I/O from JS yet. See NOTES-nova-api.md for the engine study.
+> against `openworkers-core` v0.14, covered by an integration test suite.
+> No host I/O from JS yet. See NOTES-nova-api.md for the engine study.
 
 OpenWorkers runtime backend for the [Nova JavaScript engine](https://trynova.dev)
 - a pure-Rust, data-oriented JS/TS interpreter.
@@ -61,6 +61,8 @@ addEventListener('fetch', (event) => {
   instruction budget or interrupt API. `abort()` only rejects future
   `exec()` calls. The only guard is a cap on jobs per drain.
 - **Task events** (`Event::Task`) are not supported yet.
+- **`Script.env` and bindings are not exposed to the guest yet** (the
+  guest-facing convention is still to be settled platform-wide).
 - Bodies are UTF-8 text only (request bodies lossy-decoded, response
   bodies are JS strings); streaming bodies are rejected.
 - Minimal `Request`/`Response` polyfills, not the WHATWG classes
