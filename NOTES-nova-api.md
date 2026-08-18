@@ -272,13 +272,35 @@ backend from being production-usable; the rest are ergonomics.
 8. **No timer API surface.** `enqueue_timeout_job(job, ms)` exists, but the
    embedder cannot *create* a job, so `setTimeout` cannot be built on it -
    only on a JS-side promise, which loses the delay. Related to 4.
-9. **No web platform** (expected for an engine, listed for completeness):
-   `console`, `fetch`, `URL`, `TextEncoder/Decoder`, `Request`/`Response`,
-   streams are all absent; the bootstrap here ships a minimal polyfill layer.
-10. Engine-documented gaps (lib.rs docs): no sparse arrays, non-compliant
-    RegExp (no lookaheads/lookbehinds/backreferences), no Promise subclassing,
-    no WebAssembly, "acceptable, not fast" performance.
-11. **Lockfile hazard, not an API gap:** `temporal_rs` 0.1.2 uses icu4x
+9. **RegExp cannot compile patterns real bundles ship.** The `regexp`
+   feature is backed by the `regex` crate, which trades expressiveness for
+   linear-time matching, and the translation from JS syntax is literal.
+   Three distinct failures, all thrown at first *use* of the pattern rather
+   than at construction (so the exception lands far from the literal):
+
+   | Pattern | Error |
+   |---|---|
+   | `/a(?!b)/`, `/(?<=a)b/`, `/(a)\1/` | `SyntaxError: regex parse error: ... look-around, including look-ahead and look-behind, is not supported` |
+   | `/[\ud800-\udbff]/` | `SyntaxError: regex parse error: ... hexadecimal literal is not a Unicode scalar value` |
+   | `/[\0\n]/` | `SyntaxError: regex parse error: ... backreferences are not supported` |
+
+   Named groups compile, but `match.groups` comes back empty. The cost is
+   concrete: svelte's `escape_html` builds a lone-surrogate pattern with a
+   negative lookahead, so every SvelteKit error page dies; devalue escapes
+   with `[\0...]`, so `__data.json` payloads die. *Ask:* a backtracking
+   engine (`regress`, as Boa uses) for lookaround and backreferences;
+   short of that, at least accept `\0` and surrogate escapes, and populate
+   named groups.
+10. **No web platform** (expected for an engine, listed for completeness):
+    `console`, `fetch`, `URL`, `TextEncoder/Decoder`, `Request`/`Response`,
+    streams are all absent. This repo now ships `URL`/`URLSearchParams`
+    (over the `url` crate), `Headers`, `Request`/`Response`, encoding,
+    base64 and `crypto` randomness, which is enough for SvelteKit SSR.
+11. Engine-documented gaps (lib.rs docs): no sparse arrays, non-compliant
+    RegExp (see 9), no Promise subclassing, no WebAssembly, "acceptable,
+    not fast" performance. Also absent: `Intl`, `structuredClone`, and
+    `Error.prototype.stack`.
+12. **Lockfile hazard, not an API gap:** `temporal_rs` 0.1.2 uses icu4x
     `unstable` APIs and breaks against icu 2.3, so a plain `cargo update`
     breaks the build. Worth an upstream pin.
 
@@ -295,7 +317,10 @@ wired to host functions (`resolve`/`reject` handed out through glue), since
 Rust cannot create or settle a `Promise` via public API. That plumbing (plus
 `OperationsHandler` integration) is the natural next step.
 
-What keeps this off production is not the missing web platform, which is
-embedder work, but items 1-3 above: an untrusted guest can exhaust memory,
-spin forever, or abort the whole process by recursing. None has a workaround
-at the embedding layer.
+The missing web platform was embedder work, and it is done: the 354 KB
+SvelteKit bundle of openworkers-website renders on this backend, byte for
+byte what V8 produces. What keeps this off production is items 1-3 above -
+an untrusted guest can exhaust memory, spin forever, or abort the whole
+process by recursing - and, for real-world guest code, item 9: an app whose
+regexes use lookaround, surrogate escapes or `\0` gets a SyntaxError at
+runtime, and nothing at the embedding layer can fix that.
