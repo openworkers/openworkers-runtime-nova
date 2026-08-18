@@ -44,7 +44,11 @@ use openworkers_core::TerminationReason;
 
 /// The platform layer, evaluated in order: `bootstrap.js` defines the globals
 /// the later scripts build on.
-const RUNTIME_JS: &[&str] = &[include_str!("bootstrap.js"), include_str!("encoding.js")];
+const RUNTIME_JS: &[&str] = &[
+    include_str!("bootstrap.js"),
+    include_str!("encoding.js"),
+    include_str!("url.js"),
+];
 
 /// Cap on jobs per drain, our only guard against runaway microtask loops
 /// until Nova grows a resource-limit API.
@@ -391,7 +395,22 @@ fn initialize_global_object(agent: &mut Agent, global: Object, mut gc: GcScope) 
         native_respond,
         gc.reborrow(),
     );
-    define_builtin(agent, global, "__ow_native_log", 2, native_log, gc);
+    define_builtin(
+        agent,
+        global,
+        "__ow_native_log",
+        2,
+        native_log,
+        gc.reborrow(),
+    );
+    define_builtin(
+        agent,
+        global,
+        "__ow_native_url",
+        3,
+        crate::url::native_url,
+        gc,
+    );
 }
 
 fn define_builtin(

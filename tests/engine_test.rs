@@ -103,7 +103,6 @@ async fn test_web_platform_globals_are_absent() {
         "setTimeout",
         "setInterval",
         "fetch",
-        "URL",
         "Headers",
         "crypto",
         "structuredClone",
