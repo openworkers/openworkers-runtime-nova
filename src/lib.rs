@@ -10,8 +10,5 @@ mod worker;
 
 pub use worker::Worker;
 
-// Re-export the common types and the engine so downstream code doesn't
-// need direct dependencies.
+// Re-export the common types so downstream code needs no direct dependency.
 pub use openworkers_core;
-
-pub use nova_vm;
