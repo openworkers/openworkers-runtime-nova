@@ -61,6 +61,25 @@ async fn test_a_result_shaped_return_value_is_passed_through() {
 }
 
 #[tokio::test]
+async fn test_a_result_whose_error_is_not_a_string_still_fails_the_task() {
+    let cases = [
+        ("({ code: 5 })", "[object Object]"),
+        ("new Error('boom')", "boom"),
+        ("42", "42"),
+    ];
+
+    for (expression, expected) in cases {
+        let script = format!(
+            "globalThis.default = {{ task: () => ({{ success: false, error: {expression} }}) }};"
+        );
+        let result = run_task(&script, None).await;
+
+        assert!(!result.success, "expression {expression}");
+        assert_eq!(result.error.as_deref(), Some(expected));
+    }
+}
+
+#[tokio::test]
 async fn test_a_thrown_error_becomes_a_failed_result() {
     let script = "addEventListener('task', () => { throw new Error('boom'); });";
 

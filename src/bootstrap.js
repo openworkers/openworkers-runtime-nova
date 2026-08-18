@@ -191,12 +191,21 @@
     })());
   };
 
+  // TaskResult.error is a string host-side: another shape breaks the dispatch.
+  function errorText(error) {
+    if (error === undefined || error === null) {
+      return undefined;
+    }
+
+    return error instanceof Error ? error.message : String(error);
+  }
+
   function toTaskResult(value) {
     if (value !== null && typeof value === 'object' && 'success' in value) {
       return {
         success: value.success !== false,
         data: value.data,
-        error: value.error,
+        error: errorText(value.error),
       };
     }
 
