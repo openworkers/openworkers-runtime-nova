@@ -5,6 +5,22 @@
 
   const handlers = [];
 
+  // Lone surrogates reach the host as \uXXXX escapes that its JSON parser rejects.
+  function wireText(value) {
+    return String(value).toWellFormed();
+  }
+
+  // Checked at the wire boundary, so duck-typed responses cannot skip it.
+  function wireStatus(value) {
+    const status = Number(value);
+
+    if (!Number.isInteger(status) || status < 100 || status > 599) {
+      throw new RangeError('response status out of range: ' + String(value));
+    }
+
+    return status;
+  }
+
   function headersToPairs(headers) {
     const pairs = [];
 
@@ -15,15 +31,15 @@
     // Array check must come first: arrays also have an entries() method.
     if (Array.isArray(headers)) {
       for (const pair of headers) {
-        pairs.push([String(pair[0]), String(pair[1])]);
+        pairs.push([wireText(pair[0]), wireText(pair[1])]);
       }
     } else if (typeof headers.entries === 'function') {
       for (const [key, value] of headers.entries()) {
-        pairs.push([String(key), String(value)]);
+        pairs.push([wireText(key), wireText(value)]);
       }
     } else {
       for (const key of Object.keys(headers)) {
-        pairs.push([String(key), String(headers[key])]);
+        pairs.push([wireText(key), wireText(headers[key])]);
       }
     }
 
@@ -52,7 +68,7 @@
     constructor(body, init) {
       init = init || {};
       this.body = body === undefined || body === null ? '' : String(body);
-      this.status = init.status === undefined ? 200 : init.status | 0;
+      this.status = init.status === undefined ? 200 : Number(init.status);
       this.headers = init.headers || {};
     }
 
@@ -133,12 +149,12 @@
       }
 
       return {
-        status: response.status | 0,
+        status: wireStatus(response.status),
         headers: headersToPairs(response.headers),
         body:
           response.body === undefined || response.body === null
             ? ''
-            : String(response.body),
+            : wireText(response.body),
       };
     })().then(
       function (response) {
@@ -147,7 +163,7 @@
       function (error) {
         const message =
           error instanceof Error && error.stack ? error.stack : String(error);
-        __ow_native_respond(JSON.stringify({ error: message }));
+        __ow_native_respond(JSON.stringify({ error: wireText(message) }));
       }
     );
   };
