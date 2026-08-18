@@ -25,6 +25,30 @@ use common::worker_err;
 
 const OK: &str = "addEventListener('fetch', (event) => event.respondWith(new Response('ok')));";
 
+/// `/pending` leaves its response promise unsettled and every later dispatch
+/// resolves it mid-drain, which is how a response reaches the wrong caller.
+const STALE_RESPONDER: &str = r#"
+    let stale = null;
+
+    function releaseStale() {
+        return Promise.resolve()
+            .then(() => {})
+            .then(() => {})
+            .then(() => stale(new Response('the stale request')));
+    }
+
+    addEventListener('fetch', (event) => {
+        if (event.request.url.endsWith('/pending')) {
+            event.respondWith(new Promise((resolve) => { stale = resolve; }));
+
+            return;
+        }
+
+        releaseStale();
+        event.respondWith(new Response('the current request'));
+    });
+"#;
+
 #[tokio::test]
 async fn test_a_worker_serves_many_requests() {
     let script = r#"
@@ -89,6 +113,38 @@ async fn test_the_worker_serves_again_after_a_handler_exception() {
         body_text(send(&mut worker, get(URL)).await).await,
         "recovered"
     );
+}
+
+#[tokio::test]
+async fn test_a_stale_response_promise_cannot_answer_the_next_request() {
+    let mut worker = worker(STALE_RESPONDER).await;
+
+    assert!(
+        exception_message(send_err(&mut worker, get("http://localhost/pending")).await)
+            .contains("did not settle")
+    );
+    assert_eq!(
+        body_text(send(&mut worker, get(URL)).await).await,
+        "the current request"
+    );
+}
+
+#[tokio::test]
+async fn test_a_stale_response_promise_cannot_answer_a_task() {
+    let script = format!(
+        "{STALE_RESPONDER}\naddEventListener('task', () => (releaseStale(), 'task data'));"
+    );
+    let mut worker = worker(&script).await;
+
+    assert!(
+        exception_message(send_err(&mut worker, get("http://localhost/pending")).await)
+            .contains("did not settle")
+    );
+
+    let result = common::invoke(&mut worker, None).await;
+
+    assert!(result.success, "task failed: {:?}", result.error);
+    assert_eq!(result.data, Some(serde_json::json!("task data")));
 }
 
 #[tokio::test]

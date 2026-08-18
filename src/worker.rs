@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
@@ -60,6 +61,8 @@ const MAX_JOBS_PER_DRAIN: usize = 10_000;
 /// State the bootstrap glue hands back through the `__ow_native_*` builtins.
 #[derive(Debug, Default)]
 struct HostSlots {
+    /// The only dispatch `__ow_native_respond` currently answers for.
+    dispatch: Cell<i64>,
     outcome: RefCell<Option<String>>,
 }
 
@@ -118,6 +121,7 @@ pub struct Worker {
     agent: ManuallyDrop<GcAgent>,
     realm: RealmRoot,
     hooks: NonNull<WorkerHostHooks>,
+    dispatches: i64,
     aborted: bool,
 }
 
@@ -191,10 +195,13 @@ impl Worker {
         // Double encoding turns the JSON text into a JS string literal.
         let literal = serde_json::Value::String(event.to_string()).to_string();
 
-        // Drop any stale payload from a previous dispatch.
+        // A promise an earlier dispatch left pending can settle during this
+        // one; the id is what keeps its response from landing here.
+        self.dispatches += 1;
+        self.hooks().slots.dispatch.set(self.dispatches);
         self.hooks().slots.outcome.borrow_mut().take();
 
-        self.eval(&format!("{dispatcher}({literal});"))
+        self.eval(&format!("{dispatcher}({}, {literal});", self.dispatches))
             .map_err(TerminationReason::Exception)?;
 
         self.drain_jobs()
@@ -313,6 +320,7 @@ impl openworkers_core::Worker for Worker {
             agent: ManuallyDrop::new(agent),
             realm,
             hooks,
+            dispatches: 0,
             aborted: false,
         };
 
@@ -389,7 +397,7 @@ fn initialize_global_object(agent: &mut Agent, global: Object, mut gc: GcScope) 
         agent,
         global,
         "__ow_native_respond",
-        1,
+        2,
         native_respond,
         gc.reborrow(),
     );
@@ -455,11 +463,26 @@ fn native_respond<'gc>(
     agent: &mut Agent,
     _this: Value,
     args: ArgumentsList,
-    gc: GcScope<'gc, '_>,
+    mut gc: GcScope<'gc, '_>,
 ) -> JsResult<'gc, Value<'gc>> {
-    let payload = args
+    // Guest code can pass objects here, so root arg 1 across arg 0's conversion.
+    let payload = args.get(1).scope(agent, gc.nogc());
+
+    let dispatch = args
         .get(0)
-        .to_string(agent, gc)?
+        .to_number(agent, gc.reborrow())
+        .unbind()?
+        .into_i64(agent);
+
+    // A response from a dispatch that already ended belongs to nobody.
+    if dispatch != host_slots(agent).dispatch.get() {
+        return Ok(Value::Undefined);
+    }
+
+    let payload = payload
+        .get(agent)
+        .to_string(agent, gc)
+        .unbind()?
         .to_string_lossy(agent)
         .into_owned();
 

@@ -247,11 +247,27 @@ async fn test_replacing_json_stringify_breaks_the_dispatch() {
 #[tokio::test]
 async fn test_a_guest_supplied_dispatch_payload_is_reported_as_invalid() {
     let script = r#"
-        globalThis.__ow_dispatch = function () { __ow_native_respond('not json'); };
+        globalThis.__ow_dispatch = function (dispatch) {
+            __ow_native_respond(dispatch, 'not json');
+        };
     "#;
 
     assert!(matches!(
         serve_err(script).await,
         openworkers_core::TerminationReason::Other(_)
     ));
+}
+
+#[tokio::test]
+async fn test_a_response_carrying_another_dispatch_id_is_dropped() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            const forged = { status: 200, headers: [], body: 'forged' };
+
+            __ow_native_respond(0, JSON.stringify({ value: forged }));
+            event.respondWith(new Response('real'));
+        });
+    "#;
+
+    assert_eq!(serve_body(script).await, "real");
 }

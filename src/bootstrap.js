@@ -125,21 +125,22 @@
     }
   };
 
-  // The host tells an event outcome from a failed dispatch by the key it gets.
-  function settle(promise) {
+  // The host tells an event outcome from a failed dispatch by the key it gets,
+  // and tells which dispatch it belongs to by the id echoed back.
+  function settle(dispatch, promise) {
     promise.then(
       function (value) {
-        __ow_native_respond(JSON.stringify({ value: value }, wireJson));
+        __ow_native_respond(dispatch, JSON.stringify({ value: value }, wireJson));
       },
       function (error) {
         const message =
           error instanceof Error && error.stack ? error.stack : String(error);
-        __ow_native_respond(JSON.stringify({ error: wireText(message) }));
+        __ow_native_respond(dispatch, JSON.stringify({ error: wireText(message) }));
       }
     );
   }
 
-  globalThis.__ow_dispatch = function (requestJson) {
+  globalThis.__ow_dispatch = function (dispatch, requestJson) {
     const data = JSON.parse(requestJson);
     const request = __ow_request_from_wire(data);
     const background = [];
@@ -158,7 +159,7 @@
     const module = globalThis.default;
     const hasModuleFetch = module && typeof module.fetch === 'function';
 
-    settle((async function () {
+    settle(dispatch, (async function () {
       if (fetchHandlers.length === 0 && !hasModuleFetch) {
         throw new Error('no fetch handler registered');
       }
@@ -213,7 +214,7 @@
     return { success: true, data: value };
   }
 
-  globalThis.__ow_dispatch_task = function (initJson) {
+  globalThis.__ow_dispatch_task = function (dispatch, initJson) {
     const init = JSON.parse(initJson);
     const background = [];
     let responded = false;
@@ -238,7 +239,7 @@
     const module = globalThis.default;
     const hasModuleTask = module && typeof module.task === 'function';
 
-    settle((async function () {
+    settle(dispatch, (async function () {
       if (taskHandlers.length === 0 && !hasModuleTask) {
         throw new Error('no task handler registered');
       }
