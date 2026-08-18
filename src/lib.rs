@@ -4,6 +4,7 @@
 //! See NOTES-nova-api.md for the engine reconnaissance and README.md for
 //! the current status.
 
+mod crypto;
 mod url;
 mod worker;
 

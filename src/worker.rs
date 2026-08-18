@@ -50,6 +50,7 @@ const RUNTIME_JS: &[&str] = &[
     include_str!("url.js"),
     include_str!("headers.js"),
     include_str!("http.js"),
+    include_str!("crypto.js"),
 ];
 
 /// Cap on jobs per drain, our only guard against runaway microtask loops
@@ -411,6 +412,14 @@ fn initialize_global_object(agent: &mut Agent, global: Object, mut gc: GcScope) 
         "__ow_native_url",
         3,
         crate::url::native_url,
+        gc.reborrow(),
+    );
+    define_builtin(
+        agent,
+        global,
+        "__ow_native_random_hex",
+        1,
+        crate::crypto::native_random_hex,
         gc,
     );
 }
