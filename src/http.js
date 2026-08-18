@@ -308,7 +308,6 @@
 
       return Promise.resolve(this.#body);
     }
-
   }
 
   // A request HTTP already delivered keeps its body whatever its method is.
