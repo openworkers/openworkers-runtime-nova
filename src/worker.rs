@@ -42,7 +42,9 @@ use openworkers_core::TaskResult;
 use openworkers_core::TaskSource;
 use openworkers_core::TerminationReason;
 
-const BOOTSTRAP_JS: &str = include_str!("bootstrap.js");
+/// The platform layer, evaluated in order: `bootstrap.js` defines the globals
+/// the later scripts build on.
+const RUNTIME_JS: &[&str] = &[include_str!("bootstrap.js"), include_str!("encoding.js")];
 
 /// Cap on jobs per drain, our only guard against runaway microtask loops
 /// until Nova grows a resource-limit API.
@@ -312,9 +314,11 @@ impl openworkers_core::Worker for Worker {
             aborted: false,
         };
 
-        worker
-            .eval(BOOTSTRAP_JS)
-            .map_err(TerminationReason::InitializationError)?;
+        for script in RUNTIME_JS {
+            worker
+                .eval(script)
+                .map_err(TerminationReason::InitializationError)?;
+        }
 
         worker.eval(code).map_err(TerminationReason::Exception)?;
         worker.drain_jobs()?;

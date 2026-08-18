@@ -66,6 +66,13 @@
     return pairs;
   }
 
+  class DOMException extends Error {
+    constructor(message, name) {
+      super(message);
+      this.name = name === undefined ? 'Error' : String(name);
+    }
+  }
+
   class Request {
     constructor(url, init) {
       init = init || {};
@@ -121,6 +128,7 @@
     };
   }
 
+  globalThis.DOMException = DOMException;
   globalThis.Request = Request;
   globalThis.Response = Response;
   globalThis.console = {

@@ -85,6 +85,23 @@ pub async fn serve_body(script: &str) -> String {
     body_text(serve(script).await).await
 }
 
+/// The string value of one expression, evaluated inside a fetch handler.
+pub async fn js(expression: &str) -> String {
+    serve_body(&js_script(expression)).await
+}
+
+/// The exception message from an expression expected to throw.
+pub async fn js_err(expression: &str) -> String {
+    exception_message(serve_err(&js_script(expression)).await)
+}
+
+fn js_script(expression: &str) -> String {
+    format!(
+        "addEventListener('fetch', (event) => \
+         event.respondWith(new Response(String({expression}))));"
+    )
+}
+
 pub async fn body_text(response: HttpResponse) -> String {
     let bytes = response.body.collect().await.unwrap_or_default();
 
