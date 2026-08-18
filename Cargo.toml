@@ -11,3 +11,10 @@ openworkers-core = { git = "https://github.com/openworkers/openworkers-core", ta
 
 # Nova JavaScript engine (pure Rust, data-oriented, MPL-2.0)
 nova_vm = "1.0"
+
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
