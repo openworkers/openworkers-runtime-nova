@@ -12,13 +12,14 @@
       return pairs;
     }
 
-    if (typeof headers.entries === 'function') {
-      for (const [key, value] of headers.entries()) {
-        pairs.push([String(key), String(value)]);
-      }
-    } else if (Array.isArray(headers)) {
+    // Array check must come first: arrays also have an entries() method.
+    if (Array.isArray(headers)) {
       for (const pair of headers) {
         pairs.push([String(pair[0]), String(pair[1])]);
+      }
+    } else if (typeof headers.entries === 'function') {
+      for (const [key, value] of headers.entries()) {
+        pairs.push([String(key), String(value)]);
       }
     } else {
       for (const key of Object.keys(headers)) {
