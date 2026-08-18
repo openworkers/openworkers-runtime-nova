@@ -118,10 +118,8 @@ impl Worker {
     /// Evaluate a script in the worker's realm, mapping a thrown value to its
     /// display string.
     fn eval(&mut self, source: &str) -> Result<(), String> {
-        let source = source.to_string();
-
         self.agent.run_in_realm(&self.realm, |agent, mut gc| {
-            let source = JsString::from_string(agent, source, gc.nogc());
+            let source = JsString::from_str(agent, source, gc.nogc());
 
             match agent.run_script(source.unbind(), gc.reborrow()) {
                 Ok(_) => Ok(()),
@@ -226,15 +224,11 @@ impl openworkers_core::Worker for Worker {
         // Nova 1.0 has no heap or time limit API (see NOTES-nova-api.md).
         let _ = limits;
 
-        let code = script
-            .code
-            .as_js()
-            .ok_or_else(|| {
-                TerminationReason::InitializationError(
-                    "Nova runtime only supports JavaScript code".to_string(),
-                )
-            })?
-            .to_string();
+        let code = script.code.as_js().ok_or_else(|| {
+            TerminationReason::InitializationError(
+                "Nova runtime only supports JavaScript code".to_string(),
+            )
+        })?;
 
         // GcAgent::new demands &'static hooks; leaked here, freed in Drop.
         let hooks = NonNull::from(Box::leak(Box::new(WorkerHostHooks::default())));
@@ -266,7 +260,7 @@ impl openworkers_core::Worker for Worker {
             .eval(BOOTSTRAP_JS)
             .map_err(TerminationReason::InitializationError)?;
 
-        worker.eval(&code).map_err(TerminationReason::Exception)?;
+        worker.eval(code).map_err(TerminationReason::Exception)?;
         worker.drain_jobs()?;
 
         Ok(worker)
