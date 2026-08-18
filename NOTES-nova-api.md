@@ -246,7 +246,13 @@ backend from being production-usable; the rest are ergonomics.
    aborts the process. It cannot even be covered by a test here, since the
    test process dies with it. *Ask:* a configurable max call depth throwing
    `RangeError`, as every other engine does.
-4. **No promise inspection or construction from Rust.**
+4. **RegExp gives wrong answers on non-ASCII input, and one shape of it
+   aborts the process.** Not "incomplete" the way the crate documents it:
+   `'aeb'.split(/e/)` with a non-ASCII match panics inside `wtf8`, and
+   `'cafe x'.replace(/x/, '-')` (with the real accent) silently returns
+   `'cafe x-'`. Detailed reconnaissance, root causes and per-issue asks are in
+   the RegExp section below.
+5. **No promise inspection or construction from Rust.**
    `Promise::try_get_result` and `PromiseState` are `pub(crate)`
    (promise.rs:84, promise/data.rs:19), and there is no public
    `Promise::with_resolvers`. Every host operation that resolves
@@ -255,54 +261,247 @@ backend from being production-usable; the rest are ergonomics.
    is what stands between this backend and guest-visible `fetch()`. *Ask:*
    expose `PromiseState`/`try_get_result` and a `Promise::new_with_resolvers`
    equivalent for embedders.
-5. **`GcAgent::run_job` panics on realm-less jobs.** It does
+6. **`GcAgent::run_job` panics on realm-less jobs.** It does
    `job.realm.take().unwrap()` (agent.rs:1046), but nova builds jobs with
    `realm: None` for `PromiseReactionHandler::PromiseGroup` (`Promise.all`,
    `race`, `any`, `allSettled`) and async iteration (promise_jobs.rs:344-352).
    Guest code calling any combinator kills the process. `Job::run` handles it
    correctly, so this is a bug in the convenience wrapper, not a design gap.
-6. **`Atomics.waitAsync` leaks a parked thread with no way to cancel it.**
+7. **`Atomics.waitAsync` leaks a parked thread with no way to cancel it.**
    `WaitAsyncJob::run` joins the waiter thread (atomics_object.rs:1663); with
    nobody to notify, the job never becomes `is_finished()` and the embedder
    can only drop it, leaking the thread for the process lifetime. *Ask:* a
    cancel/abort entry point on the job, or a documented embedder-side timeout.
-7. **`&'static dyn HostHooks`** forces per-worker host state to be leaked and
+8. **`&'static dyn HostHooks`** forces per-worker host state to be leaked and
    manually reclaimed after the agent is dropped. *Ask:* accept an `Rc`/`Arc`,
    or tie the hooks lifetime to the agent.
-8. **No timer API surface.** `enqueue_timeout_job(job, ms)` exists, but the
+9. **No timer API surface.** `enqueue_timeout_job(job, ms)` exists, but the
    embedder cannot *create* a job, so `setTimeout` cannot be built on it -
-   only on a JS-side promise, which loses the delay. Related to 4.
-9. **RegExp cannot compile patterns real bundles ship.** The `regexp`
-   feature is backed by the `regex` crate, which trades expressiveness for
-   linear-time matching, and the translation from JS syntax is literal.
-   Three distinct failures, all thrown at first *use* of the pattern rather
-   than at construction (so the exception lands far from the literal):
-
-   | Pattern | Error |
-   |---|---|
-   | `/a(?!b)/`, `/(?<=a)b/`, `/(a)\1/` | `SyntaxError: regex parse error: ... look-around, including look-ahead and look-behind, is not supported` |
-   | `/[\ud800-\udbff]/` | `SyntaxError: regex parse error: ... hexadecimal literal is not a Unicode scalar value` |
-   | `/[\0\n]/` | `SyntaxError: regex parse error: ... backreferences are not supported` |
-
-   Named groups compile, but `match.groups` comes back empty. The cost is
-   concrete: svelte's `escape_html` builds a lone-surrogate pattern with a
-   negative lookahead, so every SvelteKit error page dies; devalue escapes
-   with `[\0...]`, so `__data.json` payloads die. *Ask:* a backtracking
-   engine (`regress`, as Boa uses) for lookaround and backreferences;
-   short of that, at least accept `\0` and surrogate escapes, and populate
-   named groups.
+   only on a JS-side promise, which loses the delay. Related to 5.
 10. **No web platform** (expected for an engine, listed for completeness):
     `console`, `fetch`, `URL`, `TextEncoder/Decoder`, `Request`/`Response`,
     streams are all absent. This repo now ships `URL`/`URLSearchParams`
     (over the `url` crate), `Headers`, `Request`/`Response`, encoding,
     base64 and `crypto` randomness, which is enough for SvelteKit SSR.
 11. Engine-documented gaps (lib.rs docs): no sparse arrays, non-compliant
-    RegExp (see 9), no Promise subclassing, no WebAssembly, "acceptable,
+    RegExp (see 4), no Promise subclassing, no WebAssembly, "acceptable,
     not fast" performance. Also absent: `Intl`, `structuredClone`, and
     `Error.prototype.stack`.
 12. **Lockfile hazard, not an API gap:** `temporal_rs` 0.1.2 uses icu4x
     `unstable` APIs and breaks against icu 2.3, so a plain `cargo update`
     breaks the build. Worth an upstream pin.
+
+## RegExp reconnaissance (nova_vm 1.0.0)
+
+Filing-ready material for `trynova/nova`. Every "observed" line below was
+produced by running the snippet through this crate's `Worker`; every file
+reference is `nova_vm-1.0.0/src/...` unless said otherwise. Non-ASCII is
+written as `\uXXXX` escapes so this file stays ASCII.
+
+### The backend, and the absence of a translation layer
+
+`regexp` is a default-on feature (`Cargo.toml`, also pulled in by
+`annex-b-regexp`) backed by the `regex` crate through `regex::bytes`
+(`builtins/regexp/data.rs:6`; `>= 1.12.2`, 1.13.1 in this lockfile).
+
+`RegExpHeapData::compile_pattern` (`builtins/regexp/data.rs:128-139`) is the
+whole bridge between the two syntaxes:
+
+```rust
+RegexBuilder::new(pattern)
+    .dot_matches_new_line((flags & RegExpFlags::M).bits() > 0)
+    .case_insensitive((flags & RegExpFlags::I).bits() > 0)
+    .unicode(true)
+    .dot_matches_new_line((flags & RegExpFlags::S).bits() > 0)
+    .octal(false) // TODO: !strict
+    .build()
+```
+
+The JS source text goes to `RegexBuilder::new` verbatim, and the flag mapping
+above is the only other translation. R1 and R3 follow directly from that: JS
+and `regex` disagree about what several escapes and flags mean, and nobody
+reconciles them.
+
+Compilation is eager but the error is deferred: literals compile at
+bytecode-compile time (`engine/bytecode/bytecode_compiler.rs:2213-2229`), the
+`regex::Error` is stored in the heap data (`data.rs:121`), and the
+`SyntaxError` is raised at the first match
+(`builtins/regexp/abstract_operations.rs:530-533`). So the throw lands at the
+call site, arbitrarily far from the literal, and `.source`/`.flags`/
+`.toString()` never reveal it.
+
+The crate documents the non-compliance in three places
+(`builtins/regexp.rs:43-50`, `lib.rs:63-71`, `README.md:63-74`) but has no
+in-tree issue, TODO or comment about replacing the backend - the only TODO in
+the regexp module is `// TODO: !strict` on the `octal(false)` line above.
+
+### R1. Character-class escapes JS and `regex` read differently
+
+Nova passes them through, so the crate's meaning wins:
+
+| Pattern | Observed | JS meaning |
+|---|---|---|
+| `/[\b]/` | `error: invalid escape sequence found in character class` | backspace U+0008 |
+| `/[[]/` | `error: unclosed character class` | a literal `[` |
+| `/[\0]/`, `/\0/` | `error: backreferences are not supported` | NUL U+0000 |
+| `/[\ud800-\udbff]/`, `/[\u{D800}]/u` | `error: hexadecimal literal is not a Unicode scalar value` | UTF-16 code units |
+
+`\0` is nova's own doing: `.octal(false)` (`data.rs:137`) makes `regex-syntax`
+read `\0` as a backreference. The diagnostic is actively misleading - a JS
+author writing `/[\0\n]/` is told backreferences are unsupported. `\x00`
+compiles fine, so the fix is one substitution in a translation pass.
+The surrogate case has no `regex` representation in either `unicode` mode, so
+it needs a different backend or a UTF-16 matcher.
+
+*Ask:* translate JS pattern syntax before handing it to the backend, starting
+with `\0`, `\b`-in-class and unescaped `[`-in-class; report the rest with a
+diagnostic that names the JS construct.
+
+### R2. Lookaround and backreferences
+
+`/a(?!b)/` and `/(?<=a)b/` raise `error: look-around, including look-ahead and
+look-behind, is not supported`; `/(a)\1/` raises `error: backreferences are not
+supported`. This one is the backend working as designed: `regex` is a
+finite-automata engine and trades both for linear-time matching.
+
+*Ask:* an ECMAScript-shaped engine (`regress`, as Boa uses) behind the same
+`RegExp` object, or an opt-in feature that swaps the backend.
+
+### R3. `m` is silently dropped, `u`/`v` and `d` are parsed and ignored
+
+`dot_matches_new_line` is assigned twice in `compile_pattern` (`data.rs:133`
+and `:136`); the `s` call overwrites the `m` call, and `RegexBuilder::multi_line`
+is never called anywhere in the crate.
+
+```
+/^b/m.test('a\nb')   observed false   expected true
+/a$/m.test('a\nb')   observed false   expected true
+/a.b/s.test('a\nb')  observed true    correct, by the accident of ordering
+```
+
+`.unicode(true)` is hardcoded (`data.rs:135`) whatever the flags say, so
+`/\p{L}/` without `u` matches where the spec says `\p` is an identity escape.
+`full_unicode` is carried on `RegExpExecBase` and marked
+`#[expect(dead_code)]` (`abstract_operations.rs:460-461`).
+
+`d` is parsed into `has_indices` (`abstract_operations.rs:520`) and only ever
+guards a commented-out block (`:699-712`, `:743-745`), so `match.indices` is
+`undefined` for every match.
+
+*Ask:* map `m` to `multi_line`, gate `unicode` on the `u`/`v` flags, and
+either build `indices` or reject the `d` flag.
+
+### R4. `match.groups` is created and never filled
+
+```
+Object.keys(/(?<y>\d{4})/.exec('2026').groups)   observed []   expected ["y"]
+```
+
+The object is created when any capture is named
+(`abstract_operations.rs:641`, `674-693`); spec steps 34.e-f, the ones that
+write into it, are present only as comments (`:730-741`). Nova already holds
+the `Captures` (`:600`) and the names (`:641`), so this is missing wiring, not
+a backend limitation - `regex` supports named groups.
+
+*Ask:* uncomment the steps; roughly ten lines in the existing capture loop.
+
+### R5. `match.index` and `search()` return UTF-8 byte offsets
+
+The match *end* is converted to a UTF-16 index (`abstract_operations.rs:627-629`,
+which is why `lastIndex` is correct); the *start* is written straight from
+`full_match.start()` (`:622`, `:648-655`).
+
+```
+/c/.exec('\u00e9\u00e9c').index                      observed 4   expected 2
+'\u00e9\u00e9c'.search(/c/)                          observed 4   expected 2
+[...'a\u{1F600}b'.matchAll(/./gu)].map((m) => m.index)  observed [0,1,5]   expected [0,1,3]
+```
+
+### R6. Regex `replace` and `split` corrupt non-ASCII input, or abort the process
+
+`@@replace` and `@@split` treat the `index` from R5 as a UTF-16 index and
+convert it again, so the resulting offset is wrong - and when it lands
+mid-character the `wtf8` slice panics, which is an abort, not a catchable JS
+exception.
+
+```
+'a\u00e9b'.split(/\u00e9/)      panic: index 2 and/or 3 in "a\u00e9b" do not lie on character boundary
+'a\u00e9b'.replace(/\u00e9/, '-')  panic: index 2 and/or 4 ...
+'caf\u00e9 x'.replace(/x/, '-')    observed 'caf\u00e9 x-'      expected 'caf\u00e9 -'
+'caf\u00e9-x'.split(/-/)           observed ['caf\u00e9', '-']  expected ['caf\u00e9', 'x']
+```
+
+Panic sites:
+`builtins/text_processing/regexp_objects/regexp_prototype.rs:1036` (`@@replace`)
+and `:1461` (`@@split`, which also mixes a UTF-8 offset with a UTF-16 length in
+one `slice` call). For an embedder this is a denial of service on attacker-chosen
+input, and the silent-corruption case is worse: it produces a wrong HTTP
+response with no signal at all.
+
+*Ask:* pick one index unit for the whole path. A UTF-16 matcher removes the
+conversions entirely; short of that, convert `index` at `:648-655` and drop
+the re-conversion in `@@replace`/`@@split`.
+
+### R7. `$1`, `$&` and `$<name>` are not substituted
+
+`GetSubstitution` (`builtins/text_processing/string_objects/string_prototype.rs:3341-3540`)
+consumes the entire remaining template in one step whenever it is longer than
+one byte and does not start with `$` (`:3379-3383`), instead of the single
+character the spec's step 5.h calls for. Every `$` after the first character is
+therefore copied literally.
+
+```
+'2026'.replace(/(\d{4})/, '[$1]')          observed '[$1]'     expected '[2026]'
+'abc'.replace(/b/, '[$&]')                 observed 'a[$&]c'   expected 'a[b]c'
+'abc'.replace('b', '[$&]')                 observed 'a[$&]c'   expected 'a[b]c'
+'2026'.replace(/(?<y>\d{4})/, '[$<y>]')    observed '[$<y>]'   expected '[2026]'
+'2026'.replace(/(\d{4})/, '$1')            observed '2026'     correct, template starts with $
+'abc'.replace(/b/, '$$')                   observed 'a$c'      correct, same reason
+```
+
+This is independent of the regex backend (the plain-string search form is
+broken too) and would survive a backend swap. It is the most dangerous item
+here after R6: no throw, no warning, just wrong output.
+
+### R8. A regex literal is a shared singleton, so `lastIndex` leaks
+
+Literals are compiled into bytecode constants
+(`engine/bytecode/bytecode_compiler.rs:2213-2229`), so every evaluation of the
+same literal yields the same object, against ES2026 13.2.7.3.
+
+```
+function f() { return /a/g; } f() === f();          observed true   expected false
+const a = []; for (let i = 0; i < 2; i++) a.push(/x/); a[0] === a[1];   observed true
+function g() { const re = /a/g; re.exec('aa'); return re.lastIndex; }
+g() + ',' + g();                                    observed '1,2'  expected '1,1'
+```
+
+For this host that is cross-request state: a handler doing
+`const re = /a/g; re.exec(...)` sees `lastIndex` 1, then 2, then 3 on three
+successive requests to the same warm worker. Request N reads request N-1's
+match position.
+
+*Ask:* materialize a fresh `RegExp` per evaluation of the literal, as the spec
+requires.
+
+### What this costs the SvelteKit fixture
+
+Of 48 distinct patterns extracted from the 354 KB bundle, 45 compile. The
+three that do not:
+
+| Pattern | Where | What dies |
+|---|---|---|
+| `[&<]\|[\ud800-\udbff](?![\udc00-\udfff])\|...` | `@sveltejs/kit` `escape_html` | the fatal-error fallback page, the CSP `<meta>` tag, and the `data-url` attribute of an SSR-inlined `fetch` response |
+| `/[<\b\f\n\r\t\0\u2028\u2029]/g` | `devalue` `uneval` `unsafe_chars` | the inline `__sveltekit_*.data` payload, but only once a key is not an identifier (`{ 'a-b': 1 }`) - `devalue`'s `stringify`, which `__data.json` uses, is regex-free and unaffected |
+| `/[\x00-\x1F\x7F()<>@,;:"/[\]?={} \t]/` | `@sveltejs/kit` cookie name check | every `cookies.set()`, so every session and auth flow |
+
+Two of the three (R1) are translation bugs, not engine limitations, and would
+be fixed by a pattern-rewriting pass; only the `escape_html` lookahead needs a
+different engine (R2).
+
+Ordinary page rendering survives because svelte's own `escape_html` uses
+`/[&<]/g` and drives it with `lastIndex`, the one offset nova converts
+correctly (R5).
 
 ## Verdict for the openworkers use case
 
@@ -319,8 +518,11 @@ Rust cannot create or settle a `Promise` via public API. That plumbing (plus
 
 The missing web platform was embedder work, and it is done: the 354 KB
 SvelteKit bundle of openworkers-website renders on this backend, byte for
-byte what V8 produces. What keeps this off production is items 1-3 above -
-an untrusted guest can exhaust memory, spin forever, or abort the whole
-process by recursing - and, for real-world guest code, item 9: an app whose
-regexes use lookaround, surrogate escapes or `\0` gets a SyntaxError at
-runtime, and nothing at the embedding layer can fix that.
+byte what V8 produces. What keeps this off production is items 1-4 above.
+Items 1-3 are the familiar ones: an untrusted guest can exhaust memory, spin
+forever, or abort the process by recursing. Item 4 is the one this round of
+work uncovered, and it is worse than the "incomplete RegExp" the crate
+advertises: a guest that runs a regex `replace` or `split` over text with an
+accent in it either gets a silently wrong answer or aborts the runner, and a
+regex literal is shared across requests so its `lastIndex` carries state from
+the previous caller. None of that can be fixed at the embedding layer.

@@ -145,14 +145,18 @@ costs about what V8 charges; guest compute is where the engine's own
 - Bodies are UTF-8 text only (request bodies lossy-decoded, response
   bodies and headers lose lone surrogates to U+FFFD); streaming bodies
   are rejected.
-- **The engine's RegExp blocks three patterns a real bundle hits**: no
-  lookaround or backreferences, lone surrogate escapes
-  (`/[\ud800-\udbff]/`) are rejected outright, and `\0` in a character
-  class is read as a backreference. Named groups compile but never
-  populate `match.groups`. In SvelteKit terms: pages render, but the error
-  page (`escape_html`) and `__data.json` (devalue) do not. A pattern is
-  compiled on first use, not at construction, so the throw lands far from
-  the literal.
+- **The engine's RegExp is not safe for untrusted guests.** Beyond the
+  patterns it refuses to compile (lookaround, backreferences, surrogate
+  escapes, `\0` and `\b` and unescaped `[` inside a character class - all
+  thrown at first use, far from the literal), it gets non-ASCII input
+  wrong: `match.index` is a UTF-8 byte offset, so a regex `replace` or
+  `split` whose match is non-ASCII **panics the process**, and one whose
+  match merely sits after non-ASCII text returns a silently wrong string.
+  `$1` and `$&` are never substituted, the `m` flag is ignored, and a
+  regex literal is a shared singleton whose `lastIndex` carries over from
+  the previous request. In SvelteKit terms: pages render, but
+  `cookies.set()`, the fatal-error fallback page and the CSP meta tag do
+  not. See NOTES-nova-api.md for the reconnaissance and the upstream asks.
 - **No streams**: no `ReadableStream`, so a `Response` built on one is
   refused rather than silently stringified. No `AbortController`, no
   `fetch()`, no `crypto.subtle`.
