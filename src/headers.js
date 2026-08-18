@@ -28,6 +28,9 @@
     return text;
   }
 
+  // Assigned by the class body, the only scope the private header list has.
+  let toWire;
+
   class Headers {
     #list = [];
 
@@ -145,27 +148,47 @@
       return this.entries();
     }
 
-    // Sort and combine: one entry per name, except set-cookie which the
-    // standard keeps split so a client can read the cookies apart.
-    #combined() {
-      const names = [...new Set(this.#list.map((pair) => pair[0]))].sort();
-      const combined = [];
+    #names() {
+      return [...new Set(this.#list.map((pair) => pair[0]))];
+    }
+
+    // One entry per name, except set-cookie which the standard keeps split
+    // so a client can read the cookies apart.
+    #grouped(names) {
+      const grouped = [];
 
       for (const name of names) {
         if (name === 'set-cookie') {
           for (const value of this.getSetCookie()) {
-            combined.push([name, value]);
+            grouped.push([name, value]);
           }
 
           continue;
         }
 
-        combined.push([name, this.get(name)]);
+        grouped.push([name, this.get(name)]);
       }
 
-      return combined;
+      return grouped;
+    }
+
+    // The standard sorts what JS iterates.
+    #combined() {
+      return this.#grouped(this.#names().sort());
+    }
+
+    // The wire keeps the order the handler set, as the other openworkers
+    // runtimes do; the standard's sort governs the JS iterator, not HTTP.
+    static {
+      toWire = (headers) => headers.#grouped(headers.#names());
     }
   }
 
   globalThis.Headers = Headers;
+
+  // Every response shape reaches the host through here, so none can skip
+  // the name and value validation the Headers constructor does.
+  globalThis.__ow_headers_to_wire = function (init) {
+    return toWire(init instanceof Headers ? init : new Headers(init));
+  };
 })();

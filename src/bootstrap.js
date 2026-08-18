@@ -48,19 +48,8 @@
       return pairs;
     }
 
-    // Array check must come first: arrays also have an entries() method.
-    if (Array.isArray(headers)) {
-      for (const pair of headers) {
-        pairs.push([wireText(pair[0]), wireText(pair[1])]);
-      }
-    } else if (typeof headers.entries === 'function') {
-      for (const [key, value] of headers.entries()) {
-        pairs.push([wireText(key), wireText(value)]);
-      }
-    } else {
-      for (const key of Object.keys(headers)) {
-        pairs.push([wireText(key), wireText(headers[key])]);
-      }
+    for (const [name, value] of __ow_headers_to_wire(headers)) {
+      pairs.push([wireText(name), wireText(value)]);
     }
 
     return pairs;

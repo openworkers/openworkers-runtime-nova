@@ -291,6 +291,45 @@ async fn test_a_plain_object_shaped_like_a_response_is_accepted() {
     assert_eq!(common::body_text(response).await, "duck");
 }
 
+/// A hand-rolled response cannot smuggle past Headers' validation.
+#[tokio::test]
+async fn test_a_response_shaped_object_still_validates_its_headers() {
+    let cases = [
+        r"{ 'x-a': 'ok\r\nSet-Cookie: injected=1' }",
+        "{ 'bad name': 'v' }",
+        "{ 'x-a': 'nul\\0byte' }",
+    ];
+
+    for headers in cases {
+        let script = respond_with(&format!(
+            "({{ status: 200, headers: {headers}, body: 'b' }})"
+        ));
+
+        assert!(
+            exception_message(serve_err(&script).await).contains("TypeError"),
+            "headers {headers}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_the_wire_keeps_the_order_the_headers_were_set() {
+    let script = respond_with(
+        "new Response(null, { headers: [['x-z', '1'], ['x-a', '2'], ['set-cookie', 'a=1'], \
+         ['x-z', '3'], ['set-cookie', 'b=2']] })",
+    );
+
+    assert_eq!(
+        serve(&script).await.headers,
+        vec![
+            ("x-z".to_string(), "1, 3".to_string()),
+            ("x-a".to_string(), "2".to_string()),
+            ("set-cookie".to_string(), "a=1".to_string()),
+            ("set-cookie".to_string(), "b=2".to_string()),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn test_a_value_that_is_not_a_response_is_rejected() {
     for expression in ["'plain string'", "42", "({})", "Promise.resolve('str')"] {

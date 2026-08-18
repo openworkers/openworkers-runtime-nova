@@ -43,14 +43,16 @@ async fn test_async_handler() {
     let response = serve(script).await;
 
     assert_eq!(response.status, 201);
+
+    // Insertion order: the init headers, then the body's implied content-type.
     assert_eq!(
         response.headers,
         vec![
+            ("x-test".to_string(), "1".to_string()),
             (
                 "content-type".to_string(),
                 "text/plain;charset=UTF-8".to_string()
             ),
-            ("x-test".to_string(), "1".to_string()),
         ]
     );
     assert_eq!(body_text(response).await, "async body");
