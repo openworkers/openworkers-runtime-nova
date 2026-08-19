@@ -1,13 +1,9 @@
 # openworkers-runtime-nova
 
-> **Status: renders SvelteKit.** The 303 KB SSR bundle of
-> openworkers-website runs on this backend and returns a page byte-identical
-> to the V8 reference render. Synchronous `fetch` and `task` handlers run
-> end-to-end against `openworkers-core` v0.14. No host I/O from JS yet.
-> See NOTES-nova-api.md for the engine study.
-
 OpenWorkers runtime backend for the [Nova JavaScript engine](https://trynova.dev)
-- a pure-Rust, data-oriented JS/TS interpreter.
+- a pure-Rust, data-oriented JS/TS interpreter. `fetch` and `task` handlers
+run end-to-end against `openworkers-core` v0.14; no host I/O from JS yet.
+Engine study in NOTES-nova-api.md.
 
 ## Why Nova
 
