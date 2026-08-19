@@ -495,13 +495,46 @@ three that do not:
 | `/[<\b\f\n\r\t\0\u2028\u2029]/g` | `devalue` `uneval` `unsafe_chars` | the inline `__sveltekit_*.data` payload, but only once a key is not an identifier (`{ 'a-b': 1 }`) - `devalue`'s `stringify`, which `__data.json` uses, is regex-free and unaffected |
 | `/[\x00-\x1F\x7F()<>@,;:"/[\]?={} \t]/` | `@sveltejs/kit` cookie name check | every `cookies.set()`, so every session and auth flow |
 
-Two of the three (R1) are translation bugs, not engine limitations, and would
-be fixed by a pattern-rewriting pass; only the `escape_html` lookahead needs a
-different engine (R2).
+All three are refused by the parser (R1); the `escape_html` one stops at the
+surrogate escape, so its lookahead (R2) is never even read. Two of the three
+would be fixed by a pattern-rewriting pass.
 
 Ordinary page rendering survives because svelte's own `escape_html` uses
 `/[&<]/g` and drives it with `lastIndex`, the one offset nova converts
 correctly (R5).
+
+### Measured against the SvelteKit conformance suite
+
+`cargo run --release --example conformance` runs the 17 scenarios of
+`openworkers-conformance/fixtures/sveltekit-app` on the same lowered bytes V8
+recorded its oracle from (sha256 `24e7f5d5...`). Ten match byte for byte,
+seven fail, and all seven fail on one pattern:
+
+| Pattern | Diagnostic | Scenarios |
+|---|---|---|
+| `[\x00-\x1F\x7F()<>@,;:"/[\]?={} \t]` | `unclosed character class` | item-html, item-data-json, item-cookie-read, action-form, action-fail, action-devalue, urlencoded-plus |
+
+kit runs that one as `name.match(...)` to warn about cookie names that will be
+invalid in SvelteKit 3, so a deprecation notice, not a validation, is what
+turns every `cookies.set()` into a 500. Answering `null` for that one call
+takes the run to 16 of 17; the last is `urlencoded-plus`, where the oracle
+keeps a literal `+` that this runtime decodes to a space as WHATWG requires,
+down to `set-cookie: ow_greeted=Jo%20Ann` against the oracle's `Jo%2BAnn`.
+
+The other two patterns are in the fixture bundle and still refuse to compile,
+but no scenario reaches either: `escape_html` serves the fatal-error page, the
+CSP meta tag and inlined `fetch` responses, and `__data.json` goes through
+devalue's regex-free `stringify`.
+
+R5 to R8 cost this fixture nothing measurable. The item payload carries
+`\u00e9`, `\u4e2d` and an astral emoji and renders byte-identically, so no
+`replace` or `split` on the render path takes a non-ASCII match, and every
+scenario answers a warm worker exactly as it answered a cold one, so no shared
+literal leaked a `lastIndex` between requests.
+
+Diagnosing any of it needed a shim, though: kit's default `handleError` logs
+`error.stack`, which nova does not define, so all seven 500s printed
+`undefined` and nothing else.
 
 ## Verdict for the openworkers use case
 

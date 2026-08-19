@@ -132,6 +132,18 @@ SvelteKit's `etag` over the body. Parse and compile of a real-world bundle
 costs about what V8 charges; guest compute is where the engine's own
 "acceptable, but not fast" shows, at roughly 40x a V8 warm render.
 
+## Conformance
+
+`cargo run --release --example conformance` replays the 17 requests of
+`openworkers-conformance/fixtures/sveltekit-app` against the responses V8
+recorded, on the same lowered bytes. Ten match byte for byte, status,
+header order and body; the other seven die in `cookies.set()`, on a regex
+the engine will not compile. Answer that one `match` call with `null` and
+16 of 17 match, the last being the scenario where the oracle keeps a `+`
+that WHATWG decodes to a space. The bindings the fixture wants are a JS
+shim in the runner, since this backend does not expose `Script.env` yet.
+NOTES-nova-api.md has the patterns and the diagnostics.
+
 ## Known limitations (v0)
 
 - **No host I/O from JS**: no `fetch()`, no timers, no
