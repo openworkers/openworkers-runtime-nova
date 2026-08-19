@@ -39,7 +39,7 @@ OpenWorkers runtime backend for the [Nova JavaScript engine](https://trynova.dev
   platform layer (below) plus the native builtins, then evaluates the guest
   script.
 - **Web platform**: `URL`, `URLSearchParams`, `Headers`, `Request`,
-  `Response`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`,
+  `Response`, `FormData`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`,
   `queueMicrotask`, `crypto.getRandomValues`, `crypto.randomUUID`,
   `DOMException`, `console`. `URL` parsing and its setters run in the host
   through the `url` crate; the rest is JS in `src/*.js`. `Headers` iterates
@@ -163,6 +163,8 @@ costs about what V8 charges; guest compute is where the engine's own
 - **No streams**: no `ReadableStream`, so a `Response` built on one is
   refused rather than silently stringified. No `AbortController`, no
   `fetch()`, no `crypto.subtle`.
+- No `Blob` or `File`, so a `FormData` value is always a string and an
+  uploaded part arrives as its text.
 - `Request` has no `body` property (that would be a stream) and no
   `signal`. Response bodies reach the host as text.
 - `respondWith` only counts if it runs within one microtask turn of the

@@ -49,6 +49,7 @@ const RUNTIME_JS: &[&str] = &[
     include_str!("bootstrap.js"),
     include_str!("encoding.js"),
     include_str!("url.js"),
+    include_str!("formdata.js"),
     include_str!("headers.js"),
     include_str!("http.js"),
     include_str!("crypto.js"),

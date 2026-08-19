@@ -47,6 +47,10 @@
       };
     }
 
+    if (source instanceof FormData) {
+      return __ow_formdata_serialize(source);
+    }
+
     if (ArrayBuffer.isView(source)) {
       const bytes = new Uint8Array(
         source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength)
@@ -162,6 +166,12 @@
 
     json() {
       return this.text().then(JSON.parse);
+    }
+
+    formData() {
+      const type = this.#headers.get('content-type');
+
+      return this.text().then((text) => __ow_formdata_parse(text, type));
     }
 
     bytes() {
@@ -294,6 +304,12 @@
 
     json() {
       return this.text().then(JSON.parse);
+    }
+
+    formData() {
+      const type = this.#headers.get('content-type');
+
+      return this.text().then((text) => __ow_formdata_parse(text, type));
     }
 
     bytes() {
