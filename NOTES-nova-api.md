@@ -287,9 +287,14 @@ backend from being production-usable; the rest are ergonomics.
     RegExp (see 4), no Promise subclassing, no WebAssembly, "acceptable,
     not fast" performance. Also absent: `Intl`, `structuredClone`, and
     `Error.prototype.stack`.
-12. **Lockfile hazard, not an API gap:** `temporal_rs` 0.1.2 uses icu4x
-    `unstable` APIs and breaks against icu 2.3, so a plain `cargo update`
-    breaks the build. Worth an upstream pin.
+12. **Build hazard, not an API gap:** the `temporal` feature pulls
+    `temporal_rs` 0.1.2, which uses icu4x `unstable` APIs and compiles only
+    against `icu_calendar` 2.1; `v8` 152 forces 2.2.1 through
+    `temporal_capi` 0.2.3+, so no lockfile serves both. This crate builds
+    without `temporal`, which upstream 1.0.0 does not support: seven
+    `Intrinsics::temporal*` accessors read heap constants gated on the
+    feature. Filing-ready, the fix is seven `#[cfg(feature = "temporal")]`
+    in `src/ecmascript/execution/realm/intrinsics.rs`.
 
 ## RegExp reconnaissance (nova_vm 1.0.0)
 

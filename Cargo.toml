@@ -10,7 +10,21 @@ edition = "2024"
 openworkers-core = { git = "https://github.com/openworkers/openworkers-core", tag = "v0.14.0" }
 
 # Nova JavaScript engine (pure Rust, data-oriented, MPL-2.0)
-nova_vm = "1.0"
+# The nova_vm 1.0 defaults minus `temporal`: it pulls temporal_rs 0.1.2, which
+# compiles only against icu_calendar 2.1, and v8 152 forces 2.2.1 on any shared
+# lockfile. Temporal was never reachable from the guest anyway.
+nova_vm = { version = "1.0", default-features = false, features = [
+    "math",
+    "json",
+    "date",
+    "array-buffer",
+    "shared-array-buffer",
+    "weak-refs",
+    "atomics",
+    "regexp",
+    "set",
+    "annex-b",
+] }
 
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
@@ -22,3 +36,9 @@ getrandom = "0.3"
 openworkers-transform = { git = "https://github.com/openworkers/openworkers-transform", tag = "v0.1.0" }
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
+
+# nova_vm 1.0.0 does not compile without `temporal`: Intrinsics::temporal* read
+# heap constants that only exist under the feature. ../nova-vm carries the seven
+# missing cfg attributes; drop the patch once upstream ships them.
+[patch.crates-io]
+nova_vm = { path = "../nova-vm" }

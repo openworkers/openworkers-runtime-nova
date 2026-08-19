@@ -26,12 +26,18 @@ OpenWorkers runtime backend for the [Nova JavaScript engine](https://trynova.dev
 - Known limitations (their README): performance "acceptable, but not fast",
   no sparse arrays, RegExp without lookaheads/lookbehinds/backreferences,
   no Promise subclassing, **no WebAssembly**.
-- MPL-2.0 is file-level copyleft: fine as an unmodified dependency of an
+- MPL-2.0 is file-level copyleft: fine as a near-unmodified dependency of an
   MIT project; contributions to the engine go upstream.
-- **Lockfile pin (do not `cargo update` blindly):** `temporal_rs` 0.1.2
-  (nova_vm dep) uses icu4x `unstable` APIs and breaks against icu 2.3;
-  the committed `Cargo.lock` pins the icu4x family to 2.1.0. Re-pin after
-  any update, or bump `nova_vm` past the fix.
+- **No `temporal`:** the feature pulls `temporal_rs` 0.1.2, which compiles
+  only against `icu_calendar` 2.1, while `v8` 152 forces 2.2.1 through
+  `temporal_capi`. A lockfile shared with the V8 backend can satisfy one or
+  the other, never both, so this crate takes the nova_vm defaults minus
+  `temporal`. Nothing here exposed `Temporal` to the guest.
+- **`[patch.crates-io]` on `nova_vm`:** 1.0.0 does not build without
+  `temporal`, because `Intrinsics::temporal*` read heap constants that only
+  exist under the feature. The sibling `../nova-vm` checkout is the published
+  1.0.0 plus the seven missing `#[cfg(feature = "temporal")]`; drop the patch
+  once upstream ships them.
 
 ## What works today
 
