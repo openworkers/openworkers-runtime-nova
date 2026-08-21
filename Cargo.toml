@@ -1,13 +1,13 @@
 [package]
 name = "openworkers-runtime-nova"
-version = "0.1.0"
+version = "0.15.0"
 edition = "2024"
 
 [dependencies]
 
 # Common types
 # openworkers-core = { path = "../openworkers-core" }
-openworkers-core = { git = "https://github.com/openworkers/openworkers-core", tag = "v0.14.0" }
+openworkers-core = { git = "https://github.com/openworkers/openworkers-core", tag = "v0.15.0" }
 
 # Nova JavaScript engine (pure Rust, data-oriented, MPL-2.0)
 # The nova_vm 1.0 defaults minus `temporal`: it pulls temporal_rs 0.1.2, which

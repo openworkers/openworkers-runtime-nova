@@ -142,7 +142,12 @@ async fn dispatch(
     worker.exec(event).await?;
 
     let response = rx.await.expect("response channel should deliver");
-    let body = response.body.collect().await.unwrap_or_default();
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("should read body")
+        .unwrap_or_default();
 
     Ok(Answer {
         status: response.status,

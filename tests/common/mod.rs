@@ -103,7 +103,12 @@ fn js_script(expression: &str) -> String {
 }
 
 pub async fn body_text(response: HttpResponse) -> String {
-    let bytes = response.body.collect().await.unwrap_or_default();
+    let bytes = response
+        .body
+        .collect()
+        .await
+        .expect("should read body")
+        .unwrap_or_default();
 
     String::from_utf8(bytes.to_vec()).expect("body should be UTF-8")
 }

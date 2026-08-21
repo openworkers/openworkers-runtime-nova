@@ -269,7 +269,7 @@ impl Worker {
 
     fn handle_task(&mut self, init: &TaskInit) -> Result<TaskResult, TerminationReason> {
         let scheduled_time = match &init.source {
-            Some(TaskSource::Schedule { time }) => Some(*time),
+            Some(TaskSource::Schedule { time, .. }) => Some(*time),
             _ => None,
         };
 
