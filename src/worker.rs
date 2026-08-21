@@ -244,7 +244,7 @@ impl Worker {
             RequestBody::Bytes(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
             RequestBody::Stream(_) => {
                 return Err(TerminationReason::Other(
-                    "streaming request bodies are not supported yet".to_string(),
+                    "Streaming request bodies are not supported".to_string(),
                 ));
             }
         };

@@ -394,7 +394,12 @@ async fn test_streaming_request_body_is_rejected() {
     let reason = common::fetch_err(ECHO_REQUEST, request).await;
 
     match reason {
-        TerminationReason::Other(message) => assert!(message.contains("streaming")),
+        TerminationReason::Other(message) => {
+            assert!(
+                message.contains("Streaming request bodies"),
+                "unexpected message: {message}"
+            )
+        }
         other => panic!("expected Other, got {other:?}"),
     }
 }
