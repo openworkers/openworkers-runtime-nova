@@ -2,7 +2,6 @@ mod common;
 
 use openworkers_core::Event;
 use openworkers_core::TerminationReason;
-use openworkers_core::Worker as WorkerTrait;
 
 use serde_json::json;
 

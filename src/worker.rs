@@ -34,6 +34,7 @@ use nova_vm::engine::Scopable;
 use openworkers_core::Event;
 use openworkers_core::HttpRequest;
 use openworkers_core::HttpResponse;
+use openworkers_core::LogLevel;
 use openworkers_core::RequestBody;
 use openworkers_core::ResponseBody;
 use openworkers_core::RuntimeLimits;
@@ -60,11 +61,13 @@ const RUNTIME_JS: &[&str] = &[
 const MAX_JOBS_PER_DRAIN: usize = 10_000;
 
 /// State the bootstrap glue hands back through the `__ow_native_*` builtins.
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct HostSlots {
     /// The only dispatch `__ow_native_respond` currently answers for.
     dispatch: Cell<i64>,
     outcome: RefCell<Option<String>>,
+    /// Where console output goes when the embedder gave one; stderr otherwise.
+    ops: Option<openworkers_core::OperationsHandle>,
 }
 
 /// Nova hands every job to the embedder, so each worker keeps its own queue.
@@ -78,7 +81,7 @@ impl std::fmt::Debug for WorkerHostHooks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WorkerHostHooks")
             .field("queued_jobs", &self.jobs.borrow().len())
-            .field("slots", &self.slots)
+            .field("dispatch", &self.slots.dispatch.get())
             .finish()
     }
 }
@@ -287,8 +290,30 @@ impl Worker {
     }
 }
 
-impl openworkers_core::Worker for Worker {
-    async fn new(script: Script, limits: Option<RuntimeLimits>) -> Result<Self, TerminationReason> {
+impl Worker {
+    /// The constructor an embedder uses: the handle is what carries console
+    /// output back to it. Nova serves no binding through it yet.
+    pub async fn new_with_ops(
+        script: Script,
+        limits: Option<RuntimeLimits>,
+        ops: openworkers_core::OperationsHandle,
+    ) -> Result<Self, TerminationReason> {
+        Self::build(script, limits, Some(ops)).await
+    }
+
+    pub async fn exec(&mut self, task: Event) -> Result<(), TerminationReason> {
+        <Self as openworkers_core::Worker>::exec(self, task).await
+    }
+
+    pub fn abort(&mut self) {
+        <Self as openworkers_core::Worker>::abort(self)
+    }
+
+    async fn build(
+        script: Script,
+        limits: Option<RuntimeLimits>,
+        ops: Option<openworkers_core::OperationsHandle>,
+    ) -> Result<Self, TerminationReason> {
         // Nova 1.0 has no heap or time limit API (see NOTES-nova-api.md).
         let _ = limits;
 
@@ -299,7 +324,14 @@ impl openworkers_core::Worker for Worker {
         })?;
 
         // GcAgent::new demands &'static hooks; leaked here, freed in Drop.
-        let hooks = NonNull::from(Box::leak(Box::new(WorkerHostHooks::default())));
+        let hooks = WorkerHostHooks {
+            slots: HostSlots {
+                ops,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let hooks = NonNull::from(Box::leak(Box::new(hooks)));
 
         // SAFETY: the pointee stays alive until Drop.
         let hooks_ref = unsafe { hooks.as_ref() };
@@ -340,6 +372,12 @@ impl openworkers_core::Worker for Worker {
         worker.drain_jobs()?;
 
         Ok(worker)
+    }
+}
+
+impl openworkers_core::Worker for Worker {
+    async fn new(script: Script, limits: Option<RuntimeLimits>) -> Result<Self, TerminationReason> {
+        Self::build(script, limits, None).await
     }
 
     async fn exec(&mut self, mut task: Event) -> Result<(), TerminationReason> {
@@ -510,8 +548,12 @@ fn native_log<'gc>(
     let level = level.to_string_lossy(agent).into_owned();
 
     let message = message.get(agent).to_string(agent, gc).unbind()?;
+    let message = message.to_string_lossy(agent).into_owned();
 
-    eprintln!("[worker:{level}] {}", message.to_string_lossy(agent));
+    match &host_slots(agent).ops {
+        Some(ops) => ops.handle_log(level.parse().unwrap_or(LogLevel::Log), message),
+        None => eprintln!("[worker:{level}] {message}"),
+    }
 
     Ok(Value::Undefined)
 }
