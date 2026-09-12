@@ -148,12 +148,12 @@ costs about what V8 charges; guest compute is where the engine's own
 
 ## Conformance
 
-`openworkers-conformance` scores this backend at **422 of 448**, second behind
+`openworkers-conformance` scores this backend at **429 of 448**, second behind
 v8's 448 and well ahead of boa's 319. `Headers`, `Request`, `Response`, `URL`,
-timers and the DOM event core are complete. Of the 26 that are left, 7 ask for
-`WebAssembly` and 8 for a `CryptoKey`; the rest are `URLPattern`, the
-compression streams, `Intl`, `ArrayBuffer.prototype.transfer`, a
-windows-1252 decoder and `fetch()`.
+timers and the DOM event core are complete, and `crypto` is 29 of 30. Of the 19
+that are left, 7 ask for `WebAssembly`, which the engine does not have; the rest
+are the compression streams, `URLPattern`, `Intl`, `ArrayBuffer.prototype.transfer`,
+an ECDSA pair, a windows-1252 decoder and `fetch()`.
 
 `cargo run --release --example conformance` replays the 17 requests of
 `openworkers-conformance/fixtures/sveltekit-app` against the responses V8
@@ -202,11 +202,11 @@ NOTES-nova-api.md has the patterns and the diagnostics.
   the previous request. In SvelteKit terms: pages render, but
   `cookies.set()`, the fatal-error fallback page and the CSP meta tag do
   not. See NOTES-nova-api.md for the reconnaissance and the upstream asks.
-- **`crypto.subtle` stops at the digests.** `importKey`, `sign`, `verify`,
-  `generateKey`, `exportKey` and `encrypt` would each need a `CryptoKey` to
-  hold material, and an interface that exists but works for nothing is worse
-  than one that is missing. No `CompressionStream` either: it asks the host
-  for a codec through ops this runtime does not answer.
+- **`crypto.subtle` covers the digests, HMAC and AES-GCM**, and nothing else:
+  no ECDSA, no RSA, no key format but `raw`. A key's material crosses to the
+  host as hex for every operation, so it is in two places at once while a call
+  is in flight. No `CompressionStream` either: it hands the host bytes, and
+  bytes are what cannot cross this boundary.
 - The request the dispatch glue hands a handler is a string body wrapped in a
   stream: a body that is not UTF-8 text arrives lossy-decoded.
 - `respondWith` only counts if it runs within one microtask turn of the
