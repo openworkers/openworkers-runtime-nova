@@ -53,8 +53,8 @@ use openworkers_core::TerminationReason;
 /// the later scripts build on.
 const RUNTIME_JS: &[&str] = &[
     include_str!("bootstrap.js"),
+    include_str!("ops.js"),
     include_str!("encoding.js"),
-    include_str!("url.js"),
     include_str!("headers.js"),
     include_str!("http.js"),
     include_str!("crypto.js"),
@@ -62,7 +62,13 @@ const RUNTIME_JS: &[&str] = &[
 
 /// Ops this runtime answers on the native namespace. A surface module is taken
 /// only when every op it reads is here, so the set grows one op at a time.
-const PROVIDED_OPS: &[&str] = &["performanceNow", "timeOrigin", "userAgent"];
+const PROVIDED_OPS: &[&str] = &[
+    "performanceNow",
+    "timeOrigin",
+    "urlParse",
+    "urlUpdate",
+    "userAgent",
+];
 
 /// What `navigator.userAgent` reports. `Product/Version (comment)` is the HTTP
 /// grammar, so a reader splitting on the slash still finds the version.
