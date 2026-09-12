@@ -44,19 +44,18 @@ Engine study in NOTES-nova-api.md.
   script.
 - **Web platform**: most of it is
   [`openworkers-wintertc`](https://github.com/openworkers/openworkers-wintertc),
-  the surface the V8 backend runs: `Headers`, `Request`, `Response`,
-  `FormData`, `Blob`, `File`, the streams, `Event` and `EventTarget`,
-  `AbortController`, `structuredClone`, `atob`, `btoa`, `DOMException`. A
-  module is taken when this runtime answers every op it reads, and
-  `PROVIDED_OPS` is empty, so the six that read one are left out:
-  `TextEncoder`/`TextDecoder`, `URL`, `URLPattern`, `navigator`, `performance`
-  and the compression streams. The rest is here: `URL` and `URLSearchParams`
-  (parsing and the setters run in the host through the `url` crate),
-  `TextEncoder`/`TextDecoder`, `crypto.getRandomValues`, `crypto.randomUUID`,
-  `queueMicrotask`, `console`, and the glue between the wire and a `Request`.
-  `Headers` iterates sorted, as the Fetch standard prescribes, but the
-  response goes on the wire in the order the handler set it, which is what the
-  V8, JSC and Boa backends send and what an HTTP header list is.
+  the surface the V8 backend runs: `Headers`, `Request`, `Response`, `URL`,
+  `URLSearchParams`, `FormData`, `Blob`, `File`, the streams, `Event` and
+  `EventTarget`, `AbortController`, `structuredClone`, `performance`,
+  `navigator`, `atob`, `btoa`, `DOMException`. A module is taken when this
+  runtime answers every op it reads; `PROVIDED_OPS` names five, so what is
+  left out is `TextEncoder`/`TextDecoder`, `URLPattern` and the compression
+  streams. The rest is here: `TextEncoder`/`TextDecoder`, `crypto` and its
+  digests, the timers, `queueMicrotask`, `console`, and the glue between the
+  wire and a `Request`. `Headers` iterates sorted, as the Fetch standard
+  prescribes, but the response goes on the wire in the order the handler set
+  it, which is what the V8, JSC and Boa backends send and what an HTTP header
+  list is.
 - **Handler shapes**: `addEventListener('fetch'|'task')` and the module
   convention `globalThis.default = { fetch(request, env, ctx), task(...) }`.
   A listener wins over the module export.
@@ -115,13 +114,13 @@ on each. On an M-series laptop under load, for a one-line task handler:
 
 | Step | median |
 | --- | --- |
-| `Worker::new` (bootstrap + guest script eval) | 1.45 ms |
-| `exec(Event::Task)` on a warm worker | 0.06 ms |
+| `Worker::new` (bootstrap + guest script eval) | 1.01 ms |
+| `exec(Event::Task)` on a warm worker | 0.04 ms |
 
-Nearly all of `Worker::new` is the platform layer, most of it the surface: the
-same measurement is 0.45 ms without it, 0.16 ms with a one-script bootstrap.
-Nova has no snapshot, so every worker evaluates the layer from source; V8 pays
-for it once, at build time.
+Nearly all of `Worker::new` is the platform layer: the same measurement is
+0.16 ms with a one-script bootstrap, and 1.45 ms before this crate's own `URL`
+and base64 gave way to the surface's. Nova has no snapshot, so every worker
+evaluates the layer from source; V8 pays for it once, at build time.
 
 `cargo run --release --example ssr -- <bundle.js> [expected.html]` runs the
 real workload: wake a worker, render a SvelteKit page, return the HTML. The
@@ -149,10 +148,12 @@ costs about what V8 charges; guest compute is where the engine's own
 
 ## Conformance
 
-`openworkers-conformance` scores this backend at **368 of 448**, second behind
-v8's 448 and ahead of boa's 319. `Headers`, `Request`, `Response` and `URL` are
-complete; timers (0/16), `crypto.subtle` (9/30) and the globals that stand on
-them are what is missing.
+`openworkers-conformance` scores this backend at **422 of 448**, second behind
+v8's 448 and well ahead of boa's 319. `Headers`, `Request`, `Response`, `URL`,
+timers and the DOM event core are complete. Of the 26 that are left, 7 ask for
+`WebAssembly` and 8 for a `CryptoKey`; the rest are `URLPattern`, the
+compression streams, `Intl`, `ArrayBuffer.prototype.transfer`, a
+windows-1252 decoder and `fetch()`.
 
 `cargo run --release --example conformance` replays the 17 requests of
 `openworkers-conformance/fixtures/sveltekit-app` against the responses V8
@@ -166,12 +167,15 @@ NOTES-nova-api.md has the patterns and the diagnostics.
 
 ## Known limitations (v0)
 
-- **No host I/O from JS**: no `fetch()`, no timers, no
-  `OperationsHandler` wiring. A handler that never settles its response
-  promise fails with an explicit error instead of hanging.
-- **`RuntimeLimits` unenforced**: nova_vm 1.0 has no heap cap,
-  instruction budget or interrupt API. `abort()` only rejects future
-  `exec()` calls. The only guard is a cap on jobs per drain.
+- **No host I/O from JS**: no `fetch()`, and no `OperationsHandler` wiring
+  beyond console. A handler that never settles its response promise fails
+  with an explicit error instead of hanging.
+- **`RuntimeLimits` is half enforced**: `max_wall_clock_time_ms` bounds how
+  long a drain waits on timers, so an interval nobody clears ends the request
+  with `WallClockTimeout`. nova_vm 1.0 has no heap cap, instruction budget or
+  interrupt API, so nothing bounds a guest that simply computes; `abort()`
+  only rejects future `exec()` calls, and a cap on jobs per drain is the other
+  guard.
 - **Unbounded guest recursion aborts the process**: nova_vm 1.0 runs the
   guest call stack on the host stack with no depth guard, so
   `(function f() { return f(); })()` kills the runner.
@@ -198,9 +202,11 @@ NOTES-nova-api.md has the patterns and the diagnostics.
   the previous request. In SvelteKit terms: pages render, but
   `cookies.set()`, the fatal-error fallback page and the CSP meta tag do
   not. See NOTES-nova-api.md for the reconnaissance and the upstream asks.
-- **No `crypto.subtle`.** Streams, `AbortController` and the DOM event core
-  arrived with the surface; the compression streams did not, since they ask
-  the host for a codec.
+- **`crypto.subtle` stops at the digests.** `importKey`, `sign`, `verify`,
+  `generateKey`, `exportKey` and `encrypt` would each need a `CryptoKey` to
+  hold material, and an interface that exists but works for nothing is worse
+  than one that is missing. No `CompressionStream` either: it asks the host
+  for a codec through ops this runtime does not answer.
 - The request the dispatch glue hands a handler is a string body wrapped in a
   stream: a body that is not UTF-8 text arrives lossy-decoded.
 - `respondWith` only counts if it runs within one microtask turn of the
@@ -223,10 +229,12 @@ NOTES-nova-api.md has the patterns and the diagnostics.
    resolve/reject function pair per pending operation and interleave host
    futures with the job-queue drain (nova has no public promise
    constructor/inspection API - see NOTES-nova-api.md).
-2. Timers via `enqueue_timeout_job`'s milliseconds argument.
-3. Answer the ops the surface asks for, starting with `textEncode` and
-   `textDecode`: nine of them would take five more modules, `URL` and
-   `URLPattern` included, and four more would take the compression streams.
+2. A `CryptoKey`, and the six `subtle` methods that need one to hold material.
+3. The ops the surface still asks for. `textEncode` and the compression codecs
+   want to hand back bytes, and nova_vm gives an embedder no way to build a
+   typed array, so those wait on upstream; `urlPatternParse` only needs the
+   `urlpattern` crate and a shape, but the pattern it produces is a RegExp,
+   which this engine is not safe with.
 4. Stream a response body out instead of draining it at the wire.
 5. Revisit heap limits upstream: the data-oriented heap should make
    per-worker memory accounting easier than FFI engines, but nova_vm 1.0
