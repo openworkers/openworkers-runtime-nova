@@ -78,6 +78,56 @@
   // WinterTC names `self` as the global's own alias.
   globalThis.self = globalThis;
 
+  // The callback stays here; the host is told only the handle and the delay, and
+  // calls back when it is due.
+  const timers = new Map();
+  let nextTimer = 1;
+
+  function schedule(callback, delay, args, repeating) {
+    if (typeof callback !== 'function') {
+      throw new TypeError('the callback of a timer has to be a function');
+    }
+
+    const handle = nextTimer++;
+
+    timers.set(handle, { callback: callback, args: args, repeating: repeating });
+    __ow_native_timer_start(handle, Number(delay), repeating);
+
+    return handle;
+  }
+
+  function cancel(handle) {
+    const id = Number(handle);
+
+    timers.delete(id);
+    __ow_native_timer_clear(id);
+  }
+
+  globalThis.setTimeout = function (callback, delay, ...args) {
+    return schedule(callback, delay, args, false);
+  };
+
+  globalThis.setInterval = function (callback, delay, ...args) {
+    return schedule(callback, delay, args, true);
+  };
+
+  globalThis.clearTimeout = cancel;
+  globalThis.clearInterval = cancel;
+
+  globalThis.__ow_run_timer = function (handle) {
+    const timer = timers.get(handle);
+
+    if (timer === undefined) {
+      return;
+    }
+
+    if (!timer.repeating) {
+      timers.delete(handle);
+    }
+
+    timer.callback(...timer.args);
+  };
+
   globalThis.console = {
     log: makeLog('log'),
     info: makeLog('info'),

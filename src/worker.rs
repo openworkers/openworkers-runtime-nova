@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
+use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -87,6 +88,17 @@ fn surface() -> impl Iterator<Item = &'static str> {
 /// until Nova grows a resource-limit API.
 const MAX_JOBS_PER_DRAIN: usize = 10_000;
 
+/// A timer the guest set. The callback stays in JavaScript, where the guest put
+/// it; the host keeps only when to ask for it back.
+struct Timer {
+    handle: f64,
+    at: Instant,
+    /// Set for an interval, which is rescheduled by this much once it fires.
+    period: Option<Duration>,
+    /// Insertion order, so two timers due at once fire as they were set.
+    seq: u64,
+}
+
 /// State the bootstrap glue hands back through the `__ow_native_*` builtins.
 struct HostSlots {
     /// The only dispatch `__ow_native_respond` currently answers for.
@@ -96,6 +108,8 @@ struct HostSlots {
     ops: Option<openworkers_core::OperationsHandle>,
     /// What `performance.now()` counts from.
     start: Instant,
+    timers: RefCell<Vec<Timer>>,
+    timer_seq: Cell<u64>,
 }
 
 impl Default for HostSlots {
@@ -105,6 +119,8 @@ impl Default for HostSlots {
             outcome: RefCell::default(),
             ops: None,
             start: Instant::now(),
+            timers: RefCell::default(),
+            timer_seq: Cell::default(),
         }
     }
 }
@@ -166,6 +182,9 @@ pub struct Worker {
     hooks: NonNull<WorkerHostHooks>,
     dispatches: i64,
     aborted: bool,
+    /// How long a drain may wait on timers before the request is over, unless
+    /// the embedder disabled the limit.
+    wall_clock: Option<Duration>,
 }
 
 impl Worker {
@@ -191,6 +210,63 @@ impl Worker {
                 }
             }
         })
+    }
+
+    /// Runs jobs, then waits for whatever timer comes next, until neither is
+    /// left. A timer callback queues jobs of its own, so the two alternate.
+    async fn drain(&mut self) -> Result<(), TerminationReason> {
+        let deadline = self.wall_clock.map(|budget| Instant::now() + budget);
+
+        loop {
+            self.drain_jobs()?;
+
+            let Some((handle, at)) = self.next_timer() else {
+                return Ok(());
+            };
+
+            if deadline.is_some_and(|deadline| at > deadline) {
+                self.hooks().slots.timers.borrow_mut().clear();
+
+                return Err(TerminationReason::WallClockTimeout);
+            }
+
+            if let Some(wait) = at.checked_duration_since(Instant::now()) {
+                tokio::time::sleep(wait).await;
+            }
+
+            self.fire_timer(handle);
+        }
+    }
+
+    /// The timer due first, and when. An interval is rescheduled here, so a
+    /// callback that clears it during its own run still stops it.
+    fn next_timer(&self) -> Option<(f64, Instant)> {
+        let mut timers = self.hooks().slots.timers.borrow_mut();
+
+        let (index, _) = timers
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, timer)| (timer.at, timer.seq))?;
+
+        let timer = &mut timers[index];
+        let due = (timer.handle, timer.at);
+
+        match timer.period {
+            Some(period) => timer.at += period.max(Duration::from_millis(1)),
+            None => {
+                timers.remove(index);
+            }
+        }
+
+        Some(due)
+    }
+
+    /// A timer callback that throws is like an unhandled rejection: the worker
+    /// outlives it.
+    fn fire_timer(&mut self, handle: f64) {
+        if let Err(message) = self.eval(&format!("__ow_run_timer({handle});")) {
+            eprintln!("uncaught error in timer: {message}");
+        }
     }
 
     /// Promise resolution only happens here: nova hands every reaction job to
@@ -235,7 +311,7 @@ impl Worker {
         Err(TerminationReason::MaxIterationsReached)
     }
 
-    fn dispatch(
+    async fn dispatch(
         &mut self,
         dispatcher: &str,
         event: &serde_json::Value,
@@ -252,7 +328,7 @@ impl Worker {
         self.eval(&format!("{dispatcher}({}, {literal});", self.dispatches))
             .map_err(TerminationReason::Exception)?;
 
-        self.drain_jobs()
+        self.drain().await
     }
 
     fn take_outcome<T: serde::de::DeserializeOwned>(
@@ -280,7 +356,7 @@ impl Worker {
         }
     }
 
-    fn handle_fetch(&mut self, req: HttpRequest) -> Result<HttpResponse, TerminationReason> {
+    async fn handle_fetch(&mut self, req: HttpRequest) -> Result<HttpResponse, TerminationReason> {
         let body = match req.body {
             RequestBody::None => None,
             RequestBody::Bytes(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
@@ -298,7 +374,7 @@ impl Worker {
             "body": body,
         });
 
-        self.dispatch("__ow_dispatch", &request)?;
+        self.dispatch("__ow_dispatch", &request).await?;
 
         let response: DispatchResponse = self.take_outcome("fetch")?;
 
@@ -309,7 +385,7 @@ impl Worker {
         })
     }
 
-    fn handle_task(&mut self, init: &TaskInit) -> Result<TaskResult, TerminationReason> {
+    async fn handle_task(&mut self, init: &TaskInit) -> Result<TaskResult, TerminationReason> {
         let scheduled_time = match &init.source {
             Some(TaskSource::Schedule { time, .. }) => Some(*time),
             _ => None,
@@ -323,7 +399,7 @@ impl Worker {
             "scheduledTime": scheduled_time,
         });
 
-        self.dispatch("__ow_dispatch_task", &event)?;
+        self.dispatch("__ow_dispatch_task", &event).await?;
 
         self.take_outcome("task")
     }
@@ -353,8 +429,13 @@ impl Worker {
         limits: Option<RuntimeLimits>,
         ops: Option<openworkers_core::OperationsHandle>,
     ) -> Result<Self, TerminationReason> {
-        // Nova 1.0 has no heap or time limit API (see NOTES-nova-api.md).
-        let _ = limits;
+        // Nova 1.0 has no heap or instruction limit API (see NOTES-nova-api.md);
+        // the wall clock is the one budget this runtime can hold to, and it
+        // bounds how long a drain waits on timers.
+        let wall_clock = match limits.unwrap_or_default().max_wall_clock_time_ms {
+            0 => None,
+            milliseconds => Some(Duration::from_millis(milliseconds)),
+        };
 
         let code = script.code.as_js().ok_or_else(|| {
             TerminationReason::InitializationError(
@@ -399,6 +480,7 @@ impl Worker {
             hooks,
             dispatches: 0,
             aborted: false,
+            wall_clock,
         };
 
         for script in RUNTIME_JS.iter().copied().chain(surface()) {
@@ -408,7 +490,7 @@ impl Worker {
         }
 
         worker.eval(code).map_err(TerminationReason::Exception)?;
-        worker.drain_jobs()?;
+        worker.drain().await?;
 
         Ok(worker)
     }
@@ -429,7 +511,7 @@ impl openworkers_core::Worker for Worker {
                 let init = init.take().ok_or_else(|| {
                     TerminationReason::Other("FetchInit already taken".to_string())
                 })?;
-                let response = self.handle_fetch(init.req)?;
+                let response = self.handle_fetch(init.req).await?;
                 let _ = init.res_tx.send(response);
 
                 Ok(())
@@ -439,7 +521,7 @@ impl openworkers_core::Worker for Worker {
                     TerminationReason::Other("TaskInit already taken".to_string())
                 })?;
 
-                match self.handle_task(&init) {
+                match self.handle_task(&init).await {
                     Ok(result) => {
                         let _ = init.res_tx.send(result);
 
@@ -506,6 +588,22 @@ fn initialize_global_object(agent: &mut Agent, global: Object, mut gc: GcScope) 
         "__ow_native_random_hex",
         1,
         crate::crypto::native_random_hex,
+        gc.reborrow(),
+    );
+    define_builtin(
+        agent,
+        global,
+        "__ow_native_timer_start",
+        3,
+        native_timer_start,
+        gc.reborrow(),
+    );
+    define_builtin(
+        agent,
+        global,
+        "__ow_native_timer_clear",
+        1,
+        native_timer_clear,
         gc.reborrow(),
     );
 
@@ -585,6 +683,59 @@ fn define_value(agent: &mut Agent, target: Object, name: &'static str, value: Va
     target
         .internal_define_own_property(agent, key.unbind(), descriptor, gc)
         .expect("defining a property on a fresh object cannot fail");
+}
+
+/// Records when the guest wants a timer's callback back. Handles are the guest's
+/// to mint, so a clear that names an unknown one is a no-op, as the standard
+/// prescribes.
+fn native_timer_start<'gc>(
+    agent: &mut Agent,
+    _this: Value,
+    args: ArgumentsList,
+    mut gc: GcScope<'gc, '_>,
+) -> JsResult<'gc, Value<'gc>> {
+    let handle = args.get(0).to_number(agent, gc.reborrow()).unbind()?;
+    let handle = handle.into_f64(agent);
+    let delay = args.get(1).to_number(agent, gc.reborrow()).unbind()?;
+    let delay = delay.into_f64(agent);
+    let repeating = matches!(args.get(2), Value::Boolean(true));
+
+    // A delay that is not a number, or is negative, means now.
+    let delay = if delay.is_finite() && delay > 0.0 {
+        Duration::from_secs_f64(delay / 1000.0)
+    } else {
+        Duration::ZERO
+    };
+
+    let slots = host_slots(agent);
+    let seq = slots.timer_seq.get();
+
+    slots.timer_seq.set(seq + 1);
+    slots.timers.borrow_mut().push(Timer {
+        handle,
+        at: Instant::now() + delay,
+        period: repeating.then_some(delay),
+        seq,
+    });
+
+    Ok(Value::Undefined)
+}
+
+fn native_timer_clear<'gc>(
+    agent: &mut Agent,
+    _this: Value,
+    args: ArgumentsList,
+    mut gc: GcScope<'gc, '_>,
+) -> JsResult<'gc, Value<'gc>> {
+    let handle = args.get(0).to_number(agent, gc.reborrow()).unbind()?;
+    let handle = handle.into_f64(agent);
+
+    host_slots(agent)
+        .timers
+        .borrow_mut()
+        .retain(|timer| timer.handle != handle);
+
+    Ok(Value::Undefined)
 }
 
 /// Milliseconds since the worker started, as `performance.now()` reports them.
