@@ -94,3 +94,51 @@ async fn test_random_uuid_has_the_version_four_shape() {
 
     assert_ne!(js(script).await, uuid);
 }
+
+#[tokio::test]
+async fn test_an_aes_gcm_message_that_was_tampered_with_is_refused() {
+    let script = r#"
+        (async () => {
+            const key = await crypto.subtle.generateKey(
+                { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
+            );
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const cipher = new Uint8Array(
+                await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, new Uint8Array([1, 2, 3]))
+            );
+
+            cipher[0] ^= 1;
+
+            try {
+                await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, cipher);
+
+                return 'decrypted anyway';
+            } catch (error) {
+                return error.name;
+            }
+        })()
+    "#;
+
+    assert_eq!(js(script).await, "OperationError");
+}
+
+#[tokio::test]
+async fn test_a_key_imported_as_not_extractable_cannot_be_exported() {
+    let script = r#"
+        (async () => {
+            const key = await crypto.subtle.importKey(
+                'raw', new Uint8Array([1, 2, 3]), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+            );
+
+            try {
+                await crypto.subtle.exportKey('raw', key);
+
+                return 'exported anyway';
+            } catch (error) {
+                return error.name;
+            }
+        })()
+    "#;
+
+    assert_eq!(js(script).await, "InvalidAccessError");
+}

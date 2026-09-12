@@ -10,6 +10,14 @@ use nova_vm::engine::Bindable;
 use nova_vm::engine::GcScope;
 use nova_vm::engine::Scopable;
 
+use aes_gcm::Aes256Gcm;
+use aes_gcm::KeyInit;
+use aes_gcm::aead::Aead;
+use aes_gcm::aead::Payload;
+
+use hmac::Hmac;
+use hmac::Mac;
+
 use sha1::Sha1;
 use sha2::Digest;
 use sha2::Sha256;
@@ -90,4 +98,133 @@ fn from_hex(text: &str) -> Option<Vec<u8>> {
 
 fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// `__ow_native_hmac(hash, keyHex, dataHex, tagHex)`: the tag, in hex, or
+/// `"true"`/`"false"` when a tag is given to check against. Verification runs
+/// here so the comparison is the constant-time one the crate does.
+pub fn native_hmac<'gc>(
+    agent: &mut Agent,
+    _this: Value,
+    args: ArgumentsList,
+    mut gc: GcScope<'gc, '_>,
+) -> JsResult<'gc, Value<'gc>> {
+    let key = args.get(1).scope(agent, gc.nogc());
+    let data = args.get(2).scope(agent, gc.nogc());
+    let tag = args.get(3).scope(agent, gc.nogc());
+
+    let hash = args.get(0).to_string(agent, gc.reborrow()).unbind()?;
+    let hash = hash.to_string_lossy(agent).into_owned();
+
+    let key = key.get(agent).to_string(agent, gc.reborrow()).unbind()?;
+    let key = key.to_string_lossy(agent).into_owned();
+
+    let data = data.get(agent).to_string(agent, gc.reborrow()).unbind()?;
+    let data = data.to_string_lossy(agent).into_owned();
+
+    let tag = tag.get(agent);
+    let tag = if tag.is_undefined() {
+        None
+    } else {
+        let tag = tag.to_string(agent, gc.reborrow()).unbind()?;
+
+        Some(tag.to_string_lossy(agent).into_owned())
+    };
+
+    let (Some(key), Some(data)) = (from_hex(&key), from_hex(&data)) else {
+        return Ok(Value::Null);
+    };
+
+    macro_rules! mac {
+        ($hash:ty) => {{
+            let mut mac =
+                <Hmac<$hash> as Mac>::new_from_slice(&key).expect("HMAC takes a key of any length");
+
+            mac.update(&data);
+            mac
+        }};
+    }
+
+    if let Some(tag) = tag {
+        let Some(tag) = from_hex(&tag) else {
+            return Ok(Value::Boolean(false));
+        };
+
+        let held = match hash.as_str() {
+            "SHA-256" => mac!(Sha256).verify_slice(&tag).is_ok(),
+            "SHA-384" => mac!(Sha384).verify_slice(&tag).is_ok(),
+            "SHA-512" => mac!(Sha512).verify_slice(&tag).is_ok(),
+            "SHA-1" => mac!(Sha1).verify_slice(&tag).is_ok(),
+            _ => return Ok(Value::Null),
+        };
+
+        return Ok(Value::Boolean(held));
+    }
+
+    let answer = match hash.as_str() {
+        "SHA-256" => to_hex(&mac!(Sha256).finalize().into_bytes()),
+        "SHA-384" => to_hex(&mac!(Sha384).finalize().into_bytes()),
+        "SHA-512" => to_hex(&mac!(Sha512).finalize().into_bytes()),
+        "SHA-1" => to_hex(&mac!(Sha1).finalize().into_bytes()),
+        _ => return Ok(Value::Null),
+    };
+
+    Ok(JsString::from_string(agent, answer, gc.nogc())
+        .unbind()
+        .into())
+}
+
+/// `__ow_native_aes_gcm(op, keyHex, ivHex, dataHex)`: the ciphertext with its
+/// tag appended, or the plaintext, in hex. `null` when the key or the nonce is
+/// the wrong size, and `false` when the tag does not hold.
+pub fn native_aes_gcm<'gc>(
+    agent: &mut Agent,
+    _this: Value,
+    args: ArgumentsList,
+    mut gc: GcScope<'gc, '_>,
+) -> JsResult<'gc, Value<'gc>> {
+    let key = args.get(1).scope(agent, gc.nogc());
+    let iv = args.get(2).scope(agent, gc.nogc());
+    let data = args.get(3).scope(agent, gc.nogc());
+
+    let op = args.get(0).to_string(agent, gc.reborrow()).unbind()?;
+    let op = op.to_string_lossy(agent).into_owned();
+
+    let key = key.get(agent).to_string(agent, gc.reborrow()).unbind()?;
+    let key = key.to_string_lossy(agent).into_owned();
+
+    let iv = iv.get(agent).to_string(agent, gc.reborrow()).unbind()?;
+    let iv = iv.to_string_lossy(agent).into_owned();
+
+    let data = data.get(agent).to_string(agent, gc.reborrow()).unbind()?;
+    let data = data.to_string_lossy(agent).into_owned();
+
+    let (Some(key), Some(iv), Some(data)) = (from_hex(&key), from_hex(&iv), from_hex(&data)) else {
+        return Ok(Value::Null);
+    };
+
+    if key.len() != 32 || iv.len() != 12 {
+        return Ok(Value::Null);
+    }
+
+    let cipher = Aes256Gcm::new(key.as_slice().into());
+    let nonce = iv.as_slice().into();
+    let payload = Payload {
+        msg: &data,
+        aad: &[],
+    };
+
+    let out = match op.as_str() {
+        "encrypt" => cipher.encrypt(nonce, payload).ok(),
+        "decrypt" => cipher.decrypt(nonce, payload).ok(),
+        _ => return Ok(Value::Null),
+    };
+
+    let Some(out) = out else {
+        return Ok(Value::Boolean(false));
+    };
+
+    Ok(JsString::from_string(agent, to_hex(&out), gc.nogc())
+        .unbind()
+        .into())
 }

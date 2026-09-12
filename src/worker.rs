@@ -607,6 +607,22 @@ fn initialize_global_object(agent: &mut Agent, global: Object, mut gc: GcScope) 
     define_builtin(
         agent,
         global,
+        "__ow_native_hmac",
+        4,
+        crate::crypto::native_hmac,
+        gc.reborrow(),
+    );
+    define_builtin(
+        agent,
+        global,
+        "__ow_native_aes_gcm",
+        4,
+        crate::crypto::native_aes_gcm,
+        gc.reborrow(),
+    );
+    define_builtin(
+        agent,
+        global,
         "__ow_native_timer_start",
         3,
         native_timer_start,
