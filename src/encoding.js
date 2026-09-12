@@ -55,6 +55,28 @@
 
       return new Uint8Array(bytes);
     }
+
+    // Writes whole code points only: a destination too short for the next one
+    // ends the run rather than cutting it in half.
+    encodeInto(input, destination) {
+      const text = input === undefined ? '' : String(input);
+      let read = 0;
+      let written = 0;
+
+      for (const ch of text) {
+        const encoded = this.encode(ch);
+
+        if (written + encoded.length > destination.length) {
+          break;
+        }
+
+        destination.set(encoded, written);
+        written += encoded.length;
+        read += ch.length;
+      }
+
+      return { read: read, written: written };
+    }
   }
 
   function toBytes(input) {
