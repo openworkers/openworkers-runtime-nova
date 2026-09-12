@@ -99,13 +99,7 @@ async fn test_json_round_trip_of_awkward_values() {
 
 #[tokio::test]
 async fn test_web_platform_globals_are_absent() {
-    let missing = [
-        "setTimeout",
-        "setInterval",
-        "fetch",
-        "structuredClone",
-        "Intl",
-    ];
+    let missing = ["setTimeout", "setInterval", "fetch", "Intl"];
 
     let script = format!(
         "addEventListener('fetch', (event) => event.respondWith(new Response([{}].join(','))));",

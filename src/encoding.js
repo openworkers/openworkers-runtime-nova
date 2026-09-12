@@ -1,76 +1,6 @@
-// Base64 and UTF-8 conversions (WHATWG Infra / Encoding).
+// UTF-8 conversions (WHATWG Encoding).
 (function () {
   'use strict';
-
-  const BASE64 =
-    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-
-  function invalidCharacter(message) {
-    return new DOMException(message, 'InvalidCharacterError');
-  }
-
-  function btoa(data) {
-    const input = String(data);
-    let output = '';
-
-    for (let i = 0; i < input.length; i += 3) {
-      const bytes = [];
-
-      for (let j = 0; j < 3 && i + j < input.length; j++) {
-        const code = input.charCodeAt(i + j);
-
-        if (code > 0xff) {
-          throw invalidCharacter('btoa: code point above U+00FF');
-        }
-
-        bytes.push(code);
-      }
-
-      const bits = (bytes[0] << 16) | ((bytes[1] || 0) << 8) | (bytes[2] || 0);
-
-      output +=
-        BASE64[(bits >> 18) & 63] +
-        BASE64[(bits >> 12) & 63] +
-        (bytes.length > 1 ? BASE64[(bits >> 6) & 63] : '=') +
-        (bytes.length > 2 ? BASE64[bits & 63] : '=');
-    }
-
-    return output;
-  }
-
-  function atob(data) {
-    let input = String(data).replace(/[ \t\n\f\r]/g, '');
-
-    if (input.length % 4 === 0) {
-      input = input.replace(/==?$/, '');
-    }
-
-    if (input.length % 4 === 1) {
-      throw invalidCharacter('atob: input length is not a valid base64 length');
-    }
-
-    let output = '';
-    let bits = 0;
-    let width = 0;
-
-    for (const character of input) {
-      const value = BASE64.indexOf(character);
-
-      if (value < 0) {
-        throw invalidCharacter('atob: character outside the base64 alphabet');
-      }
-
-      bits = (bits << 6) | value;
-      width += 6;
-
-      if (width >= 8) {
-        width -= 8;
-        output += String.fromCharCode((bits >> width) & 0xff);
-      }
-    }
-
-    return output;
-  }
 
   // Every label the Encoding standard maps to UTF-8; no other encoding is
   // decodable here, so the rest are rejected rather than approximated.
@@ -94,19 +24,12 @@
       const text = input === undefined ? '' : String(input);
       const bytes = [];
 
-      for (let i = 0; i < text.length; i++) {
-        let code = text.charCodeAt(i);
+      // Walk code points, not UTF-16 indices: charCodeAt aborts the process on
+      // a heap string whose first character is a surrogate pair.
+      for (const ch of text) {
+        let code = ch.codePointAt(0);
 
-        if (code >= 0xd800 && code <= 0xdbff) {
-          const trail = text.charCodeAt(i + 1);
-
-          if (trail >= 0xdc00 && trail <= 0xdfff) {
-            code = 0x10000 + ((code - 0xd800) << 10) + (trail - 0xdc00);
-            i++;
-          } else {
-            code = REPLACEMENT;
-          }
-        } else if (code >= 0xdc00 && code <= 0xdfff) {
+        if (code >= 0xd800 && code <= 0xdfff) {
           code = REPLACEMENT;
         }
 
@@ -284,8 +207,6 @@
     }
   }
 
-  globalThis.atob = atob;
-  globalThis.btoa = btoa;
   globalThis.TextEncoder = TextEncoder;
   globalThis.TextDecoder = TextDecoder;
 })();

@@ -67,37 +67,47 @@ async fn test_multipart_body_parses_into_form_data() {
     assert_eq!(body, r#"[["a","1"],["b","line\r\nbreak"]]"#);
 }
 
-/// No File in this runtime, so an upload arrives as the part's text.
+/// Reports what an upload arrived as.
+const READ_FILE: &str = r#"
+    addEventListener('fetch', (event) => {
+        event.respondWith(event.request.formData().then(async (form) => {
+            const file = form.get('f');
+
+            return new Response(JSON.stringify([
+                file instanceof File,
+                file.name,
+                file.type,
+                await file.text(),
+            ]));
+        }));
+    });
+"#;
+
 #[tokio::test]
-async fn test_a_multipart_file_part_arrives_as_text() {
-    let body = read_form(
+async fn test_a_multipart_file_part_arrives_as_a_file() {
+    let request = post(
         "--X\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a.txt\"\r\n\
          Content-Type: text/plain\r\n\r\nhello\r\n--X--\r\n",
         "multipart/form-data; boundary=\"X\"",
-    )
-    .await;
+    );
 
-    assert_eq!(body, r#"[["f","hello"]]"#);
+    let body = body_text(fetch(READ_FILE, request).await).await;
+
+    assert_eq!(body, r#"[true,"a.txt","text/plain","hello"]"#);
 }
 
 #[tokio::test]
 async fn test_a_body_of_another_type_is_refused() {
     let body = read_form("{}", "application/json").await;
 
-    assert_eq!(
-        body,
-        "TypeError: cannot read a application/json body as FormData"
-    );
+    assert_eq!(body, "TypeError: Invalid content-type for formData()");
 }
 
 #[tokio::test]
 async fn test_a_multipart_body_without_a_boundary_is_refused() {
     let body = read_form("--X--", "multipart/form-data").await;
 
-    assert_eq!(
-        body,
-        "TypeError: multipart/form-data body without a boundary"
-    );
+    assert_eq!(body, "TypeError: Missing boundary in multipart/form-data");
 }
 
 #[tokio::test]
@@ -150,5 +160,8 @@ async fn test_reading_the_body_twice_is_refused() {
          await response.text(); \
          return response.formData().catch((error) => String(error)); })()";
 
-    assert_eq!(js(script).await, "TypeError: body already read");
+    assert_eq!(
+        js(script).await,
+        "TypeError: Body has already been consumed"
+    );
 }

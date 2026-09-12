@@ -50,11 +50,28 @@ const RUNTIME_JS: &[&str] = &[
     include_str!("bootstrap.js"),
     include_str!("encoding.js"),
     include_str!("url.js"),
-    include_str!("formdata.js"),
     include_str!("headers.js"),
     include_str!("http.js"),
     include_str!("crypto.js"),
 ];
+
+/// Ops this runtime answers on the native namespace. A surface module is taken
+/// only when every op it reads is here, so the set grows one op at a time.
+const PROVIDED_OPS: &[&str] = &[];
+
+/// Keep the surface in its own order: a module patches what the one before it
+/// defined.
+fn surface() -> impl Iterator<Item = &'static str> {
+    openworkers_wintertc::SURFACE
+        .iter()
+        .filter(|module| {
+            module
+                .required_ops
+                .iter()
+                .all(|op| PROVIDED_OPS.contains(op))
+        })
+        .map(|module| module.source)
+}
 
 /// Cap on jobs per drain, our only guard against runaway microtask loops
 /// until Nova grows a resource-limit API.
@@ -362,7 +379,7 @@ impl Worker {
             aborted: false,
         };
 
-        for script in RUNTIME_JS {
+        for script in RUNTIME_JS.iter().copied().chain(surface()) {
             worker
                 .eval(script)
                 .map_err(TerminationReason::InitializationError)?;

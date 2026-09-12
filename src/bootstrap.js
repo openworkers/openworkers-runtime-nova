@@ -55,13 +55,6 @@
     return pairs;
   }
 
-  class DOMException extends Error {
-    constructor(message, name) {
-      super(message);
-      this.name = name === undefined ? 'Error' : String(name);
-    }
-  }
-
   function makeLog(level) {
     return function () {
       const parts = [];
@@ -82,7 +75,6 @@
     };
   }
 
-  globalThis.DOMException = DOMException;
   globalThis.console = {
     log: makeLog('log'),
     info: makeLog('info'),

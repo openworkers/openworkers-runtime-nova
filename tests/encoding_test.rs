@@ -172,7 +172,13 @@ async fn test_text_decoder_strips_a_leading_bom() {
         format!("new TextDecoder('utf-8', {{ ignoreBOM: true }}).decode(new Uint8Array({bom}))");
 
     assert_eq!(js(&script).await, "a");
-    assert_eq!(js(&kept).await, "\u{feff}a");
+
+    // Read back as JSON: a response body is UTF-8 decoded, which eats a BOM
+    // that leads it.
+    assert_eq!(
+        js(&format!("JSON.stringify({kept})")).await,
+        "\"\u{feff}a\""
+    );
 }
 
 #[tokio::test]

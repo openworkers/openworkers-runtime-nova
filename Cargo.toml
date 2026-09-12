@@ -9,6 +9,9 @@ edition = "2024"
 # openworkers-core = { path = "../openworkers-core" }
 openworkers-core = { git = "https://github.com/openworkers/openworkers-core", tag = "v0.15.0" }
 
+# The shared web surface
+openworkers-wintertc = { path = "../openworkers-wintertc" }
+
 # Nova JavaScript engine (pure Rust, data-oriented, MPL-2.0)
 # The nova_vm 1.0 defaults minus `temporal`: it pulls temporal_rs 0.1.2, which
 # compiles only against icu_calendar 2.1, and v8 152 forces 2.2.1 on any shared

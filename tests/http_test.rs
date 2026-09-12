@@ -2,6 +2,7 @@ mod common;
 
 use common::js;
 use common::js_err;
+use common::serve_body;
 
 #[tokio::test]
 async fn test_a_string_body_declares_its_content_type() {
@@ -130,10 +131,19 @@ async fn test_ok_follows_the_status() {
 }
 
 #[tokio::test]
-async fn test_a_stream_body_is_refused_rather_than_stringified() {
-    let script = "new Response({ getReader() {} })";
+async fn test_a_stream_body_reaches_the_wire() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            event.respondWith(new Response(new ReadableStream({
+                start(controller) {
+                    controller.enqueue(new TextEncoder().encode('streamed'));
+                    controller.close();
+                },
+            })));
+        });
+    "#;
 
-    assert!(js_err(script).await.contains("streaming"));
+    assert_eq!(serve_body(script).await, "streamed");
 }
 
 #[tokio::test]

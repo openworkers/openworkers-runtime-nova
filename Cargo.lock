@@ -871,6 +871,7 @@ dependencies = [
  "nova_vm",
  "openworkers-core",
  "openworkers-transform",
+ "openworkers-wintertc",
  "serde",
  "serde_json",
  "sha2",
@@ -891,6 +892,10 @@ dependencies = [
  "swc_ecma_transforms_typescript",
  "swc_ecma_visit",
 ]
+
+[[package]]
+name = "openworkers-wintertc"
+version = "0.1.6"
 
 [[package]]
 name = "owo-colors"
