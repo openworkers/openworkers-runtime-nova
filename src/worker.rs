@@ -599,6 +599,14 @@ fn initialize_global_object(agent: &mut Agent, global: Object, mut gc: GcScope) 
     define_builtin(
         agent,
         global,
+        "__ow_native_digest",
+        2,
+        crate::crypto::native_digest,
+        gc.reborrow(),
+    );
+    define_builtin(
+        agent,
+        global,
         "__ow_native_timer_start",
         3,
         native_timer_start,

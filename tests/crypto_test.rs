@@ -57,7 +57,7 @@ async fn test_a_view_that_is_not_an_integer_array_is_rejected() {
         "crypto.getRandomValues(new DataView(new ArrayBuffer(4)))",
     ] {
         assert!(
-            js_err(expression).await.contains("TypeError"),
+            js_err(expression).await.contains("TypeMismatchError"),
             "{expression}"
         );
     }

@@ -875,6 +875,7 @@ dependencies = [
  "openworkers-wintertc",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "tokio",
  "url",
