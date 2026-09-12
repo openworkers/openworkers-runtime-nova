@@ -29,11 +29,13 @@ Engine study in NOTES-nova-api.md.
   `temporal_capi`. A lockfile shared with the V8 backend can satisfy one or
   the other, never both, so this crate takes the nova_vm defaults minus
   `temporal`. Nothing here exposed `Temporal` to the guest.
-- **`[patch.crates-io]` on `nova_vm`:** 1.0.0 does not build without
-  `temporal`, because `Intrinsics::temporal*` read heap constants that only
-  exist under the feature. The sibling `../nova-vm` checkout is the published
-  1.0.0 plus the seven missing `#[cfg(feature = "temporal")]`; drop the patch
-  once upstream ships them.
+- **The engine comes from a fork:** 1.0.0 does not build without `temporal`,
+  because `Intrinsics::temporal*` read heap constants that only exist under the
+  feature.
+  [`openworkers/nova`](https://github.com/openworkers/nova/tree/openworkers/v1.0.0)
+  is the 1.0.0 release plus the seven missing `#[cfg(feature = "temporal")]`,
+  tagged `v1.0.0-ow.1`. The dependency goes back to crates.io the day upstream
+  takes them; the two commits are written to go there as they are.
 
 ## What works today
 
