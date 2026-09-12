@@ -4,6 +4,9 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
+use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bytes::Bytes;
 
@@ -20,6 +23,7 @@ use nova_vm::ecmascript::InternalMethods;
 use nova_vm::ecmascript::Job;
 use nova_vm::ecmascript::JsResult;
 use nova_vm::ecmascript::Object;
+use nova_vm::ecmascript::OrdinaryObject;
 use nova_vm::ecmascript::PropertyDescriptor;
 use nova_vm::ecmascript::PropertyKey;
 use nova_vm::ecmascript::RealmRoot;
@@ -57,7 +61,13 @@ const RUNTIME_JS: &[&str] = &[
 
 /// Ops this runtime answers on the native namespace. A surface module is taken
 /// only when every op it reads is here, so the set grows one op at a time.
-const PROVIDED_OPS: &[&str] = &[];
+const PROVIDED_OPS: &[&str] = &["performanceNow", "timeOrigin", "userAgent"];
+
+/// What `navigator.userAgent` reports. `Product/Version (comment)` is the HTTP
+/// grammar, so a reader splitting on the slash still finds the version.
+fn user_agent() -> String {
+    format!("OpenWorkers/{} (nova)", env!("CARGO_PKG_VERSION"))
+}
 
 /// Keep the surface in its own order: a module patches what the one before it
 /// defined.
@@ -78,13 +88,25 @@ fn surface() -> impl Iterator<Item = &'static str> {
 const MAX_JOBS_PER_DRAIN: usize = 10_000;
 
 /// State the bootstrap glue hands back through the `__ow_native_*` builtins.
-#[derive(Default)]
 struct HostSlots {
     /// The only dispatch `__ow_native_respond` currently answers for.
     dispatch: Cell<i64>,
     outcome: RefCell<Option<String>>,
     /// Where console output goes when the embedder gave one; stderr otherwise.
     ops: Option<openworkers_core::OperationsHandle>,
+    /// What `performance.now()` counts from.
+    start: Instant,
+}
+
+impl Default for HostSlots {
+    fn default() -> Self {
+        Self {
+            dispatch: Cell::default(),
+            outcome: RefCell::default(),
+            ops: None,
+            start: Instant::now(),
+        }
+    }
 }
 
 /// Nova hands every job to the embedder, so each worker keeps its own queue.
@@ -484,33 +506,97 @@ fn initialize_global_object(agent: &mut Agent, global: Object, mut gc: GcScope) 
         "__ow_native_random_hex",
         1,
         crate::crypto::native_random_hex,
+        gc.reborrow(),
+    );
+
+    define_native_namespace(agent, global, gc);
+}
+
+/// The one global the shared surface reads its ops out of. A module reads an op
+/// at call time, so what is missing here is a module that was never installed,
+/// not a call that fails.
+fn define_native_namespace(agent: &mut Agent, global: Object, mut gc: GcScope) {
+    let ops = OrdinaryObject::create_empty_object(agent, gc.nogc()).unbind();
+
+    define_builtin(
+        agent,
+        ops.into(),
+        "performanceNow",
+        0,
+        native_performance_now,
+        gc.reborrow(),
+    );
+
+    // The wall clock when this worker started, which is what `now` counts from.
+    let origin = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
+
+    let origin = Value::from_f64(agent, origin, gc.nogc()).unbind();
+
+    define_value(agent, ops.into(), "timeOrigin", origin, gc.reborrow());
+
+    let agent_string = JsString::from_string(agent, user_agent(), gc.nogc()).unbind();
+
+    define_value(
+        agent,
+        ops.into(),
+        "userAgent",
+        agent_string.into(),
+        gc.reborrow(),
+    );
+
+    define_value(
+        agent,
+        global,
+        openworkers_wintertc::NATIVE_NAMESPACE,
+        ops.into(),
         gc,
     );
 }
 
 fn define_builtin(
     agent: &mut Agent,
-    global: Object,
+    target: Object,
     name: &'static str,
     length: u32,
     behaviour: RegularFn,
-    gc: GcScope,
+    mut gc: GcScope,
 ) {
     let function = create_builtin_function(
         agent,
         Behaviour::Regular(behaviour),
         BuiltinFunctionArgs::new(length, name),
         gc.nogc(),
-    );
+    )
+    .unbind();
+
+    define_value(agent, target, name, function.into(), gc.reborrow());
+}
+
+fn define_value(agent: &mut Agent, target: Object, name: &'static str, value: Value, gc: GcScope) {
     let key = PropertyKey::from_static_str(agent, name, gc.nogc());
     let descriptor = PropertyDescriptor {
-        value: Some(function.unbind().into()),
+        value: Some(value.unbind()),
         ..Default::default()
     };
 
-    global
+    target
         .internal_define_own_property(agent, key.unbind(), descriptor, gc)
-        .expect("defining a builtin on a fresh global object cannot fail");
+        .expect("defining a property on a fresh object cannot fail");
+}
+
+/// Milliseconds since the worker started, as `performance.now()` reports them.
+fn native_performance_now<'gc>(
+    agent: &mut Agent,
+    _this: Value,
+    _args: ArgumentsList,
+    gc: GcScope<'gc, '_>,
+) -> JsResult<'gc, Value<'gc>> {
+    let elapsed = host_slots(agent).start.elapsed().as_secs_f64() * 1000.0;
+
+    Ok(Value::from_f64(agent, elapsed, gc.into_nogc()))
 }
 
 fn host_slots(agent: &Agent) -> &HostSlots {

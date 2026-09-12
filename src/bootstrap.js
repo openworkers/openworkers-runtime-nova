@@ -75,6 +75,9 @@
     };
   }
 
+  // WinterTC names `self` as the global's own alias.
+  globalThis.self = globalThis;
+
   globalThis.console = {
     log: makeLog('log'),
     info: makeLog('info'),
