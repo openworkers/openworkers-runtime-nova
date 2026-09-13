@@ -835,7 +835,9 @@ fn describe<'gc>(agent: &mut Agent, error: JsError<'gc>, mut gc: GcScope<'gc, '_
     if let Ok(value) = Object::try_from(value) {
         let key = PropertyKey::from_static_str(agent, "stack", gc.nogc()).unbind();
 
-        if let Ok(stack) = value.unbind().internal_get(agent, key, value.into(), gc.reborrow())
+        if let Ok(stack) = value
+            .unbind()
+            .internal_get(agent, key, value.into(), gc.reborrow())
             && let Ok(stack) = JsString::try_from(stack)
         {
             return stack.to_string_lossy(agent).into_owned();

@@ -73,6 +73,9 @@ async fn main() {
         let _ = worker.exec(task).await;
         let _ = rx.await;
 
-        println!("         exec on the warm worker {:.1} ms", warm.elapsed().as_secs_f64() * 1000.0);
+        println!(
+            "         exec on the warm worker {:.1} ms",
+            warm.elapsed().as_secs_f64() * 1000.0
+        );
     }
 }
