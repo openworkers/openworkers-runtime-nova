@@ -1,6 +1,6 @@
 [package]
 name = "openworkers-runtime-nova"
-version = "0.15.3"
+version = "0.15.4"
 edition = "2024"
 
 [dependencies]
@@ -19,7 +19,7 @@ openworkers-wintertc = { git = "https://github.com/openworkers/openworkers-winte
 # Dropping `temporal` is what keeps nova_vm out of temporal_rs 0.1.2, which
 # compiles only against icu_calendar 2.1, where v8 152 forces 2.2.1 on a shared
 # lockfile. Temporal was never reachable from the guest anyway.
-nova_vm = { path = "../nova/nova_vm", default-features = false, features = [
+nova_vm = { git = "https://github.com/openworkers/nova", tag = "v1.0.0-ow.2", default-features = false, features = [
     "math",
     "json",
     "date",
