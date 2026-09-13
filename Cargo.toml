@@ -1,6 +1,6 @@
 [package]
 name = "openworkers-runtime-nova"
-version = "0.15.1"
+version = "0.15.2"
 edition = "2024"
 
 [dependencies]
@@ -10,7 +10,8 @@ edition = "2024"
 openworkers-core = { git = "https://github.com/openworkers/openworkers-core", tag = "v0.15.0" }
 
 # The shared web surface
-openworkers-wintertc = { path = "../openworkers-wintertc" }
+# openworkers-wintertc = { path = "../openworkers-wintertc" }
+openworkers-wintertc = { git = "https://github.com/openworkers/openworkers-wintertc", tag = "v0.1.6" }
 
 # Nova JavaScript engine (pure Rust, data-oriented, MPL-2.0)
 # The 1.0.0 release plus the seven cfg attributes Intrinsics::temporal* needs to

@@ -966,7 +966,7 @@ dependencies = [
 
 [[package]]
 name = "openworkers-runtime-nova"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "aes-gcm",
  "bytes",
@@ -1001,6 +1001,7 @@ dependencies = [
 [[package]]
 name = "openworkers-wintertc"
 version = "0.1.6"
+source = "git+https://github.com/openworkers/openworkers-wintertc?tag=v0.1.6#e7825c2b8be933d54d206197822be00ee65e345f"
 
 [[package]]
 name = "owo-colors"
