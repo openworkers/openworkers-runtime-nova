@@ -1,6 +1,6 @@
 [package]
 name = "openworkers-runtime-nova"
-version = "0.15.5"
+version = "0.15.6"
 edition = "2024"
 
 [dependencies]
@@ -39,14 +39,14 @@ tokio = { version = "1", features = ["time"] }
 serde_json = "1"
 url = "2.5.8"
 getrandom = "0.3"
-sha1 = "0.10"
-sha2 = "0.10"
-hmac = "0.12"
+sha1 = "0.11"
+sha2 = "0.11"
+hmac = "0.13"
 # An asset body is arbitrary bytes, and only text crosses into nova
-base64 = "0.22"
-aes-gcm = "0.10"
+base64 = "0.23"
+aes-gcm = "0.11"
 
 [dev-dependencies]
 openworkers-transform = { git = "https://github.com/openworkers/openworkers-transform", tag = "v0.1.0" }
-sha2 = "0.10"
+sha2 = "0.11"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }

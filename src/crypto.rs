@@ -137,8 +137,8 @@ pub fn native_hmac<'gc>(
 
     macro_rules! mac {
         ($hash:ty) => {{
-            let mut mac =
-                <Hmac<$hash> as Mac>::new_from_slice(&key).expect("HMAC takes a key of any length");
+            let mut mac = <Hmac<$hash> as KeyInit>::new_from_slice(&key)
+                .expect("HMAC takes a key of any length");
 
             mac.update(&data);
             mac
@@ -203,12 +203,17 @@ pub fn native_aes_gcm<'gc>(
         return Ok(Value::Null);
     };
 
-    if key.len() != 32 || iv.len() != 12 {
+    // A slice no longer converts on its own; the sizes are the ones AES-256-GCM
+    // takes, so the conversion is the check.
+    let (Ok(key), Ok(iv)) = (
+        <&[u8; 32]>::try_from(key.as_slice()),
+        <&[u8; 12]>::try_from(iv.as_slice()),
+    ) else {
         return Ok(Value::Null);
-    }
+    };
 
-    let cipher = Aes256Gcm::new(key.as_slice().into());
-    let nonce = iv.as_slice().into();
+    let cipher = Aes256Gcm::new(key.into());
+    let nonce = iv.into();
     let payload = Payload {
         msg: &data,
         aad: &[],
