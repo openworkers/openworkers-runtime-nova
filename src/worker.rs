@@ -22,6 +22,7 @@ use nova_vm::ecmascript::GcAgent;
 use nova_vm::ecmascript::HostHooks;
 use nova_vm::ecmascript::InternalMethods;
 use nova_vm::ecmascript::Job;
+use nova_vm::ecmascript::JsError;
 use nova_vm::ecmascript::JsResult;
 use nova_vm::ecmascript::Object;
 use nova_vm::ecmascript::OrdinaryObject;
@@ -210,15 +211,7 @@ impl Worker {
 
             match agent.run_script(source.unbind(), gc.reborrow()) {
                 Ok(_) => Ok(()),
-                Err(e) => {
-                    let message = e
-                        .unbind()
-                        .to_string(agent, gc)
-                        .to_string_lossy(agent)
-                        .into_owned();
-
-                    Err(message)
-                }
+                Err(e) => Err(describe(agent, e.unbind(), gc)),
             }
         })
     }
@@ -832,6 +825,27 @@ fn native_performance_now<'gc>(
     let elapsed = host_slots(agent).start.elapsed().as_secs_f64() * 1000.0;
 
     Ok(Value::from_f64(agent, elapsed, gc.into_nogc()))
+}
+
+/// A thrown value as a message, with the stack when it carries one: without it
+/// an engine-level error names no frame the guest would recognise.
+fn describe<'gc>(agent: &mut Agent, error: JsError<'gc>, mut gc: GcScope<'gc, '_>) -> String {
+    let value = error.value();
+
+    if let Ok(value) = Object::try_from(value) {
+        let key = PropertyKey::from_static_str(agent, "stack", gc.nogc()).unbind();
+
+        if let Ok(stack) = value.unbind().internal_get(agent, key, value.into(), gc.reborrow())
+            && let Ok(stack) = JsString::try_from(stack)
+        {
+            return stack.to_string_lossy(agent).into_owned();
+        }
+    }
+
+    error
+        .to_string(agent, gc)
+        .to_string_lossy(agent)
+        .into_owned()
 }
 
 pub(crate) fn host_slots(agent: &Agent) -> &HostSlots {
