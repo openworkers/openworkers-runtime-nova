@@ -54,6 +54,7 @@ use openworkers_core::TerminationReason;
 const RUNTIME_JS: &[&str] = &[
     include_str!("bootstrap.js"),
     include_str!("ops.js"),
+    include_str!("bindings.js"),
     include_str!("encoding.js"),
     include_str!("headers.js"),
     include_str!("http.js"),
@@ -106,16 +107,19 @@ struct Timer {
 }
 
 /// State the bootstrap glue hands back through the `__ow_native_*` builtins.
-struct HostSlots {
+pub(crate) struct HostSlots {
     /// The only dispatch `__ow_native_respond` currently answers for.
     dispatch: Cell<i64>,
     outcome: RefCell<Option<String>>,
-    /// Where console output goes when the embedder gave one; stderr otherwise.
-    ops: Option<openworkers_core::OperationsHandle>,
+    /// Where console output goes, and what answers a binding call, when the
+    /// embedder gave one.
+    pub(crate) ops: Option<openworkers_core::OperationsHandle>,
     /// What `performance.now()` counts from.
     start: Instant,
     timers: RefCell<Vec<Timer>>,
     timer_seq: Cell<u64>,
+    /// Binding calls the guest is waiting on.
+    pub(crate) bindings: RefCell<Vec<crate::bindings::Pending>>,
 }
 
 impl Default for HostSlots {
@@ -127,6 +131,7 @@ impl Default for HostSlots {
             start: Instant::now(),
             timers: RefCell::default(),
             timer_seq: Cell::default(),
+            bindings: RefCell::default(),
         }
     }
 }
@@ -226,6 +231,28 @@ impl Worker {
         loop {
             self.drain_jobs()?;
 
+            // A binding answer comes before a timer: the timer is a delay the
+            // guest asked for, this is one it is only waiting through.
+            let pending = self.hooks().slots.bindings.borrow_mut().pop();
+
+            if let Some(pending) = pending {
+                let answer = match deadline {
+                    Some(deadline) => {
+                        let budget = deadline.saturating_duration_since(Instant::now());
+
+                        match tokio::time::timeout(budget, pending.answer).await {
+                            Ok(answer) => answer,
+                            Err(_) => return Err(TerminationReason::WallClockTimeout),
+                        }
+                    }
+                    None => pending.answer.await,
+                };
+
+                self.settle_binding(pending.id, answer);
+
+                continue;
+            }
+
             let Some((handle, at)) = self.next_timer() else {
                 return Ok(());
             };
@@ -265,6 +292,21 @@ impl Worker {
         }
 
         Some(due)
+    }
+
+    /// Hands a binding's answer back to the promise the guest is holding. The
+    /// payload is JSON either way, so it crosses as a string literal.
+    fn settle_binding(&mut self, id: f64, answer: Result<String, String>) {
+        let (ok, payload) = match answer {
+            Ok(payload) => (true, payload),
+            Err(message) => (false, message),
+        };
+
+        let payload = serde_json::Value::String(payload).to_string();
+
+        if let Err(message) = self.eval(&format!("__ow_settle_binding({id}, {ok}, {payload});")) {
+            eprintln!("uncaught error settling a binding: {message}");
+        }
     }
 
     /// A timer callback that throws is like an unhandled rejection: the worker
@@ -495,6 +537,10 @@ impl Worker {
                 .map_err(TerminationReason::InitializationError)?;
         }
 
+        worker
+            .eval(&crate::bindings::env_source(&script.env, &script.bindings))
+            .map_err(TerminationReason::InitializationError)?;
+
         worker.eval(code).map_err(TerminationReason::Exception)?;
         worker.drain().await?;
 
@@ -602,6 +648,14 @@ fn initialize_global_object(agent: &mut Agent, global: Object, mut gc: GcScope) 
         "__ow_native_digest",
         2,
         crate::crypto::native_digest,
+        gc.reborrow(),
+    );
+    define_builtin(
+        agent,
+        global,
+        "__ow_native_binding",
+        5,
+        crate::bindings::native_binding,
         gc.reborrow(),
     );
     define_builtin(
@@ -780,7 +834,7 @@ fn native_performance_now<'gc>(
     Ok(Value::from_f64(agent, elapsed, gc.into_nogc()))
 }
 
-fn host_slots(agent: &Agent) -> &HostSlots {
+pub(crate) fn host_slots(agent: &Agent) -> &HostSlots {
     agent
         .get_host_data()
         .downcast_ref::<HostSlots>()

@@ -4,11 +4,16 @@
 //! See NOTES-nova-api.md for the engine reconnaissance and README.md for
 //! the current status.
 
+mod bindings;
 mod crypto;
 mod url;
 mod worker;
 
 pub use worker::Worker;
+
+/// Binding types this runtime serves, for an embedder that refuses a worker
+/// declaring one it cannot.
+pub use bindings::SUPPORTED as SUPPORTED_BINDINGS;
 
 // Re-export the common types so downstream code needs no direct dependency.
 pub use openworkers_core;
