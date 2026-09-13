@@ -966,7 +966,7 @@ dependencies = [
 
 [[package]]
 name = "openworkers-runtime-nova"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "aes-gcm",
  "base64",
