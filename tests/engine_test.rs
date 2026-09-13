@@ -157,15 +157,20 @@ async fn test_regexp_rejects_lone_surrogate_escapes() {
     assert!(body.contains("not a Unicode scalar value"), "{body}");
 }
 
+/// What devalue escapes with, and what an escapeRegExp is written with: both
+/// were compile errors until the engine started translating the pattern.
 #[tokio::test]
-async fn test_regexp_reads_a_nul_escape_as_a_backreference() {
-    // What devalue escapes with, so JSON payload serialization dies here.
+async fn test_regexp_takes_the_patterns_javascript_writes() {
     let script = r#"
         addEventListener('fetch', (event) => {
             let outcome;
 
             try {
-                outcome = 'matched ' + /[\0\n]/.test('a');
+                outcome = [
+                    /[\0\n]/.test('\u0000'),
+                    /[\0\n]/.test('a'),
+                    /[.*+?^${}()|[\]\\]/.test('['),
+                ].join(',');
             } catch (error) {
                 outcome = String(error);
             }
@@ -174,10 +179,7 @@ async fn test_regexp_reads_a_nul_escape_as_a_backreference() {
         });
     "#;
 
-    let body = serve_body(script).await;
-
-    assert!(body.contains("SyntaxError"), "{body}");
-    assert!(body.contains("backreferences are not supported"), "{body}");
+    assert_eq!(serve_body(script).await, "true,false,true");
 }
 
 #[tokio::test]
