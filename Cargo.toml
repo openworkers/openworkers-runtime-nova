@@ -7,7 +7,7 @@ edition = "2024"
 
 # Common types
 # openworkers-core = { path = "../openworkers-core" }
-openworkers-core = { git = "https://github.com/openworkers/openworkers-core", tag = "v0.17.0" }
+openworkers-core = { git = "https://github.com/openworkers/openworkers-core", tag = "v0.18.0" }
 
 # The shared web surface
 # openworkers-wintertc = { path = "../openworkers-wintertc" }
