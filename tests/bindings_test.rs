@@ -260,3 +260,79 @@ async fn test_invoke_arguments_that_cannot_be_json_are_a_type_error() {
 fn test_the_runtime_says_it_serves_invoke() {
     assert!(openworkers_runtime_nova::SUPPORTED_BINDINGS.contains(&BindingType::Invoke));
 }
+
+#[tokio::test]
+async fn test_an_asset_binding_takes_a_bare_path() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            event.respondWith(
+                env.ASSETS.fetch('/_app/version.json').then((r) =>
+                    r.text().then((body) => new Response(r.status + '|' + body))
+                )
+            );
+        });
+    "#;
+
+    let body = serve(
+        script,
+        vec![BindingInfo::new("ASSETS", BindingType::Assets)],
+    )
+    .await;
+
+    assert_eq!(body, "200|ASSETS served http://localhost/_app/version.json");
+}
+
+#[tokio::test]
+async fn test_an_asset_binding_takes_a_url_object_and_a_request() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            event.respondWith(
+                Promise.all([
+                    env.ASSETS.fetch(new URL('http://localhost/a.js')),
+                    env.ASSETS.fetch(new Request('http://localhost/b.js')),
+                ])
+                    .then((responses) => Promise.all(responses.map((r) => r.text())))
+                    .then((bodies) => new Response(bodies.join(',')))
+            );
+        });
+    "#;
+
+    let body = serve(
+        script,
+        vec![BindingInfo::new("ASSETS", BindingType::Assets)],
+    )
+    .await;
+
+    assert_eq!(
+        body,
+        "ASSETS served http://localhost/a.js,ASSETS served http://localhost/b.js"
+    );
+}
+
+#[tokio::test]
+async fn test_an_asset_binding_never_hands_dot_segments_to_the_host() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            event.respondWith(
+                Promise.all([
+                    env.ASSETS.fetch('/a/../../secret.txt'),
+                    env.ASSETS.fetch('http://localhost/b/../../secret.txt'),
+                    env.ASSETS.fetch('/%2e%2e/secret.txt'),
+                ])
+                    .then((responses) => Promise.all(responses.map((r) => r.text())))
+                    .then((bodies) => new Response(bodies.join(',')))
+            );
+        });
+    "#;
+
+    let body = serve(
+        script,
+        vec![BindingInfo::new("ASSETS", BindingType::Assets)],
+    )
+    .await;
+
+    // The URL parser clamps all three at the root, the encoded one included
+    let served = "ASSETS served http://localhost/secret.txt";
+
+    assert_eq!(body, [served, served, served].join(","));
+}

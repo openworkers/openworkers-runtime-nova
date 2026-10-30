@@ -44,7 +44,17 @@
   globalThis.__ow_assets_binding = function (name) {
     return {
       fetch(input, init) {
-        const request = input instanceof Request ? input : new Request(String(input), init);
+        // A bare path is a path on the host of the binding, which new Request would
+        // refuse. Resolving it against a base also removes dot segments, so the
+        // host never gets a `..` from the guest.
+        const request =
+          input instanceof Request
+            ? input
+            : {
+                url: new URL(String(input), 'http://localhost/').href,
+                method: (init && init.method) || 'GET',
+                headers: new Headers(init && init.headers),
+              };
 
         return call('fetch', name, 'fetch', {
           url: request.url,
