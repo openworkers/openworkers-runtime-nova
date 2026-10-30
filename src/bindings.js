@@ -71,6 +71,18 @@
     };
   };
 
+  globalThis.__ow_invoke_binding = function (name) {
+    return {
+      invoke(command, args) {
+        if (typeof command !== 'string') {
+          return Promise.reject(new TypeError('invoke: the command is not a string'));
+        }
+
+        return call('invoke', name, 'invoke', { command: command, args: args });
+      },
+    };
+  };
+
   globalThis.__ow_absent_binding = function (name) {
     const refuse = () => {
       throw new Error(name + ' is a binding this runtime does not serve');

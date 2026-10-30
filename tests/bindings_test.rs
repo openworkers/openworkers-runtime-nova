@@ -11,6 +11,8 @@ use openworkers_core::DatabaseResult;
 use openworkers_core::Event;
 use openworkers_core::HttpRequest;
 use openworkers_core::HttpResponse;
+#[cfg(feature = "invoke")]
+use openworkers_core::InvokeResult;
 use openworkers_core::LogLevel;
 use openworkers_core::OpFuture;
 use openworkers_core::OperationsHandler;
@@ -54,6 +56,22 @@ impl OperationsHandler for Bindings {
         let rows = serde_json::json!([{ "sql": sql, "params": params.len() }]);
 
         Box::pin(async move { DatabaseResult::Rows(rows.to_string()) })
+    }
+
+    #[cfg(feature = "invoke")]
+    fn handle_binding_invoke(
+        &self,
+        binding: &str,
+        name: &str,
+        args: serde_json::Value,
+    ) -> OpFuture<'_, InvokeResult> {
+        let answer = match name {
+            "echo" => InvokeResult::Value(serde_json::json!({ "binding": binding, "args": args })),
+            "fail" => InvokeResult::Error("the disk is full".to_string()),
+            other => InvokeResult::Error(format!("no function named '{other}'")),
+        };
+
+        Box::pin(async move { answer })
     }
 }
 
@@ -153,4 +171,92 @@ async fn test_two_binding_calls_both_settle() {
     .await;
 
     assert_eq!(body, "200,200");
+}
+
+/// Runs `body`, the inside of an async function that returns a string, with
+/// one invoke binding named RUST.
+#[cfg(feature = "invoke")]
+async fn invoke(body: &str) -> String {
+    let script = format!(
+        "addEventListener('fetch', (event) => {{
+            event.respondWith((async () => {{ {body} }})().then((text) => new Response(String(text))));
+        }});"
+    );
+
+    serve(&script, vec![BindingInfo::new("RUST", BindingType::Invoke)]).await
+}
+
+#[cfg(feature = "invoke")]
+#[tokio::test]
+async fn test_invoke_returns_what_the_host_answers() {
+    let body = invoke("return JSON.stringify(await env.RUST.invoke('echo', { a: 2 }));").await;
+
+    assert_eq!(body, r#"{"args":{"a":2},"binding":"RUST"}"#);
+}
+
+#[cfg(feature = "invoke")]
+#[tokio::test]
+async fn test_invoke_keeps_arguments_that_are_falsy() {
+    let body = invoke(
+        "const answers = [];
+         for (const value of [0, false, '', null]) {
+             answers.push((await env.RUST.invoke('echo', value)).args);
+         }
+         return JSON.stringify(answers);",
+    )
+    .await;
+
+    assert_eq!(body, r#"[0,false,"",null]"#);
+}
+
+#[cfg(feature = "invoke")]
+#[tokio::test]
+async fn test_invoke_without_arguments_sends_null() {
+    let body = invoke("return JSON.stringify((await env.RUST.invoke('echo')).args);").await;
+
+    assert_eq!(body, "null");
+}
+
+#[cfg(feature = "invoke")]
+#[tokio::test]
+async fn test_invoke_error_rejects_with_its_message() {
+    let body =
+        invoke("try { await env.RUST.invoke('fail'); } catch (error) { return error.message; }")
+            .await;
+
+    assert_eq!(body, "the disk is full");
+}
+
+#[cfg(feature = "invoke")]
+#[tokio::test]
+async fn test_invoke_command_that_is_not_a_string_is_a_type_error() {
+    let body = invoke(
+        "try { await env.RUST.invoke(42); } catch (error) { return error.name + ': ' + error.message; }",
+    )
+    .await;
+
+    assert_eq!(body, "TypeError: invoke: the command is not a string");
+}
+
+#[cfg(feature = "invoke")]
+#[tokio::test]
+async fn test_invoke_arguments_that_cannot_be_json_are_a_type_error() {
+    let body = invoke(
+        "const names = [];
+         const circular = {}; circular.self = circular;
+         for (const value of [circular, { a: 1n }]) {
+             try { await env.RUST.invoke('echo', value); names.push('sent'); }
+             catch (error) { names.push(error.name); }
+         }
+         return names.join(',');",
+    )
+    .await;
+
+    assert_eq!(body, "TypeError,TypeError");
+}
+
+#[cfg(feature = "invoke")]
+#[test]
+fn test_the_runtime_says_it_serves_invoke() {
+    assert!(openworkers_runtime_nova::SUPPORTED_BINDINGS.contains(&BindingType::Invoke));
 }

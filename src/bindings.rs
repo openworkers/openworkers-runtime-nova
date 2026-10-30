@@ -24,6 +24,8 @@ use openworkers_core::BindingType;
 use openworkers_core::DatabaseOp;
 use openworkers_core::DatabaseResult;
 use openworkers_core::HttpRequest;
+#[cfg(feature = "invoke")]
+use openworkers_core::InvokeResult;
 use openworkers_core::OperationsHandle;
 use openworkers_core::RequestBody;
 use openworkers_core::SqlParam;
@@ -39,7 +41,12 @@ pub struct Pending {
 
 /// Binding types this runtime answers, which is what the runner checks a
 /// worker's declarations against.
-pub const SUPPORTED: &[BindingType] = &[BindingType::Assets, BindingType::Database];
+pub const SUPPORTED: &[BindingType] = &[
+    BindingType::Assets,
+    BindingType::Database,
+    #[cfg(feature = "invoke")]
+    BindingType::Invoke,
+];
 
 #[derive(Deserialize)]
 struct FetchParams {
@@ -111,6 +118,8 @@ fn answer(
     match kind.as_str() {
         "fetch" => Box::pin(async move { binding_fetch(ops, name, params).await }),
         "query" => Box::pin(async move { binding_query(ops, name, params).await }),
+        #[cfg(feature = "invoke")]
+        "invoke" => Box::pin(async move { binding_invoke(ops, name, params).await }),
         other => {
             let message = format!("'{other}' is not a binding call this runtime makes");
 
@@ -148,6 +157,32 @@ async fn binding_fetch(
         "body": BASE64.encode(&body),
     }))
     .map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "invoke")]
+#[derive(Deserialize)]
+struct InvokeParams {
+    command: String,
+    #[serde(default)]
+    args: serde_json::Value,
+}
+
+#[cfg(feature = "invoke")]
+async fn binding_invoke(
+    ops: OperationsHandle,
+    name: String,
+    params: String,
+) -> Result<String, String> {
+    let params: InvokeParams =
+        serde_json::from_str(&params).map_err(|e| format!("bad invoke parameters: {e}"))?;
+
+    match ops
+        .handle_binding_invoke(&name, &params.command, params.args)
+        .await
+    {
+        InvokeResult::Value(value) => Ok(value.to_string()),
+        InvokeResult::Error(message) => Err(message),
+    }
 }
 
 async fn binding_query(
@@ -223,6 +258,8 @@ pub fn env_source(
             match binding.binding_type {
                 BindingType::Assets => format!("{name}: __ow_assets_binding({name})"),
                 BindingType::Database => format!("{name}: __ow_database_binding({name})"),
+                #[cfg(feature = "invoke")]
+                BindingType::Invoke => format!("{name}: __ow_invoke_binding({name})"),
                 // The runner refuses these before a worker gets here, so what is
                 // left is a binding a newer runner allowed through.
                 _ => format!("{name}: __ow_absent_binding({name})"),

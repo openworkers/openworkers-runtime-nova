@@ -56,6 +56,11 @@ Engine study in NOTES-nova-api.md.
   prescribes, but the response goes on the wire in the order the handler set
   it, which is what the V8, JSC and Boa backends send and what an HTTP header
   list is.
+- **Bindings**: `Worker::new_with_ops` serves `Assets` and `Database`, and
+  `Invoke` with the `invoke` feature: `env.<NAME>.invoke(command, args)` calls
+  `OperationsHandler::handle_binding_invoke` with JSON arguments. The call
+  rejects with the message of an `InvokeResult::Error`. `SUPPORTED_BINDINGS`
+  lists what a build serves.
 - **Handler shapes**: `addEventListener('fetch'|'task')` and the module
   convention `globalThis.default = { fetch(request, env, ctx), task(...) }`.
   A listener wins over the module export.
