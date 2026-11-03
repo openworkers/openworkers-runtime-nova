@@ -5,8 +5,11 @@
 //! the current status.
 
 mod bindings;
+mod compression;
 mod crypto;
+mod encoding;
 mod url;
+mod url_pattern;
 mod worker;
 
 pub use worker::Worker;

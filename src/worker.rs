@@ -65,9 +65,15 @@ const RUNTIME_JS: &[&str] = &[
 /// Ops this runtime answers on the native namespace. A surface module is taken
 /// only when every op it reads is here, so the set grows one op at a time.
 const PROVIDED_OPS: &[&str] = &[
+    "compressionDrop",
+    "compressionFinish",
+    "compressionPush",
+    "compressionStart",
     "performanceNow",
     "timeOrigin",
     "urlParse",
+    "urlPatternParse",
+    "urlPatternProcessInput",
     "urlUpdate",
     "userAgent",
 ];
@@ -121,6 +127,8 @@ pub(crate) struct HostSlots {
     timer_seq: Cell<u64>,
     /// Binding calls the guest is waiting on.
     pub(crate) bindings: RefCell<Vec<crate::bindings::Pending>>,
+    /// Compression codecs the guest has open.
+    pub(crate) codecs: crate::compression::Codecs,
 }
 
 impl Default for HostSlots {
@@ -133,6 +141,7 @@ impl Default for HostSlots {
             timers: RefCell::default(),
             timer_seq: Cell::default(),
             bindings: RefCell::default(),
+            codecs: Default::default(),
         }
     }
 }
@@ -630,9 +639,9 @@ fn initialize_global_object(agent: &mut Agent, global: Object, mut gc: GcScope) 
     define_builtin(
         agent,
         global,
-        "__ow_native_random_hex",
+        "__ow_native_random",
         1,
-        crate::crypto::native_random_hex,
+        crate::crypto::native_random,
         gc.reborrow(),
     );
     define_builtin(
@@ -681,6 +690,39 @@ fn initialize_global_object(agent: &mut Agent, global: Object, mut gc: GcScope) 
         "__ow_native_timer_clear",
         1,
         native_timer_clear,
+        gc.reborrow(),
+    );
+
+    define_builtin(
+        agent,
+        global,
+        "__ow_native_ecdsa",
+        5,
+        crate::crypto::native_ecdsa,
+        gc.reborrow(),
+    );
+    define_builtin(
+        agent,
+        global,
+        "__ow_native_url_pattern",
+        3,
+        crate::url_pattern::native_url_pattern,
+        gc.reborrow(),
+    );
+    define_builtin(
+        agent,
+        global,
+        "__ow_native_compression",
+        5,
+        crate::compression::native_compression,
+        gc.reborrow(),
+    );
+    define_builtin(
+        agent,
+        global,
+        "__ow_native_encoding",
+        5,
+        crate::encoding::native_encoding,
         gc.reborrow(),
     );
 

@@ -47,6 +47,45 @@ impl OperationsHandler for Bindings {
         })
     }
 
+    fn handle_fetch(&self, request: HttpRequest) -> OpFuture<'_, Result<HttpResponse, String>> {
+        if request.url.ends_with("/refused") {
+            return Box::pin(async { Err("the host does not reach that".to_string()) });
+        }
+
+        if request.url.ends_with("/empty") {
+            return Box::pin(async {
+                Ok(HttpResponse {
+                    status: 204,
+                    headers: Vec::new(),
+                    body: ResponseBody::None,
+                })
+            });
+        }
+
+        let body = match request.body {
+            openworkers_core::RequestBody::Bytes(bytes) => {
+                String::from_utf8_lossy(&bytes).into_owned()
+            }
+            _ => String::new(),
+        };
+
+        let echoed = format!(
+            "{} {} [{}] {}",
+            request.method,
+            request.url,
+            request.headers.get("x-probe").cloned().unwrap_or_default(),
+            body
+        );
+
+        Box::pin(async move {
+            Ok(HttpResponse {
+                status: 201,
+                headers: vec![("x-answer".to_string(), "yes".to_string())],
+                body: ResponseBody::Bytes(Bytes::from(echoed)),
+            })
+        })
+    }
+
     fn handle_binding_database(
         &self,
         _binding: &str,
@@ -335,4 +374,75 @@ async fn test_an_asset_binding_never_hands_dot_segments_to_the_host() {
     let served = "ASSETS served http://localhost/secret.txt";
 
     assert_eq!(body, [served, served, served].join(","));
+}
+
+#[tokio::test]
+async fn test_the_global_fetch_goes_through_the_host_and_carries_a_body() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            event.respondWith(
+                fetch('http://example.test/echo', {
+                    method: 'POST',
+                    headers: { 'x-probe': 'on' },
+                    body: 'h\u00e9llo',
+                }).then(async (r) =>
+                    new Response(r.status + '|' + r.headers.get('x-answer') + '|' + (await r.text()))
+                )
+            );
+        });
+    "#;
+
+    let body = serve(script, Vec::new()).await;
+
+    assert_eq!(
+        body,
+        "201|yes|POST http://example.test/echo [on] h\u{e9}llo"
+    );
+}
+
+#[tokio::test]
+async fn test_the_global_fetch_takes_a_request_and_a_bodiless_status() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            event.respondWith(
+                fetch(new Request('http://example.test/empty')).then(async (r) =>
+                    new Response(r.status + '|' + (await r.text()).length)
+                )
+            );
+        });
+    "#;
+
+    assert_eq!(serve(script, Vec::new()).await, "204|0");
+}
+
+#[tokio::test]
+async fn test_the_global_fetch_rejects_when_the_host_refuses_or_the_signal_is_aborted() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            event.respondWith((async () => {
+                const out = [];
+
+                try {
+                    await fetch('http://example.test/refused');
+                    out.push('accepted');
+                } catch (error) {
+                    out.push(error.message);
+                }
+
+                try {
+                    await fetch('http://example.test/x', { signal: AbortSignal.abort() });
+                    out.push('accepted');
+                } catch (error) {
+                    out.push(error.name);
+                }
+
+                return new Response(out.join('|'));
+            })());
+        });
+    "#;
+
+    assert_eq!(
+        serve(script, Vec::new()).await,
+        "the host does not reach that|AbortError"
+    );
 }

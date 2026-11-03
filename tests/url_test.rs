@@ -314,3 +314,30 @@ async fn test_detached_params_do_not_touch_a_url() {
 
     assert_eq!(js(script).await, "a=2");
 }
+
+#[tokio::test]
+async fn test_url_pattern_matches_and_names_the_groups() {
+    let script = "(() => { \
+        const m = new URLPattern({ pathname: '/books/:id' }).exec('https://example.com/books/123'); \
+        return m.pathname.groups.id + ',' + m.pathname.input; })()";
+
+    assert_eq!(js(script).await, "123,/books/123");
+}
+
+#[tokio::test]
+async fn test_url_pattern_tests_a_string_pattern_against_a_base() {
+    let script = "(() => { const p = new URLPattern('/a/*', 'https://x.test'); \
+        return [p.test('https://x.test/a/b/c'), p.test('https://x.test/b'), \
+                p.test('https://y.test/a/b')].join(); })()";
+
+    assert_eq!(js(script).await, "true,false,false");
+}
+
+#[tokio::test]
+async fn test_url_pattern_rejects_a_pattern_that_does_not_parse() {
+    assert!(
+        js_err("new URLPattern({ pathname: '/(' })")
+            .await
+            .contains("TypeError")
+    );
+}

@@ -142,3 +142,85 @@ async fn test_a_key_imported_as_not_extractable_cannot_be_exported() {
 
     assert_eq!(js(script).await, "InvalidAccessError");
 }
+
+#[tokio::test]
+async fn test_ecdsa_signs_and_verifies_and_refuses_altered_data() {
+    let script = r#"
+        (async () => {
+            const out = [];
+
+            for (const [curve, hash, size] of [['P-256', 'SHA-256', 64], ['P-384', 'SHA-384', 96]]) {
+                const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: curve }, true, ['sign', 'verify']);
+                const other = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: curve }, true, ['sign', 'verify']);
+                const data = new TextEncoder().encode('message');
+                const algorithm = { name: 'ECDSA', hash: hash };
+                const signature = await crypto.subtle.sign(algorithm, pair.privateKey, data);
+
+                out.push(
+                    signature.byteLength === size,
+                    await crypto.subtle.verify(algorithm, pair.publicKey, signature, data),
+                    await crypto.subtle.verify(algorithm, pair.publicKey, signature, new TextEncoder().encode('messagf')),
+                    await crypto.subtle.verify(algorithm, other.publicKey, signature, data)
+                );
+            }
+
+            return out.join();
+        })()
+    "#;
+
+    assert_eq!(
+        js(script).await,
+        "true,true,false,false,true,true,false,false"
+    );
+}
+
+#[tokio::test]
+async fn test_ecdsa_public_key_round_trips_through_raw_and_a_private_one_does_not_export() {
+    let script = r#"
+        (async () => {
+            const algorithm = { name: 'ECDSA', namedCurve: 'P-256' };
+            const pair = await crypto.subtle.generateKey(algorithm, true, ['sign', 'verify']);
+            const raw = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
+            const imported = await crypto.subtle.importKey('raw', raw, algorithm, true, ['verify']);
+            const data = new Uint8Array([1, 2, 3]);
+            const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, data);
+            const held = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, imported, signature, data);
+            let refused = 'no';
+
+            try {
+                await crypto.subtle.exportKey('raw', pair.privateKey);
+            } catch (error) {
+                refused = error.name;
+            }
+
+            return [raw.length, raw[0], held, refused].join();
+        })()
+    "#;
+
+    assert_eq!(js(script).await, "65,4,true,InvalidAccessError");
+}
+
+#[tokio::test]
+async fn test_ecdsa_refuses_a_curve_it_does_not_have_and_a_point_off_the_curve() {
+    let script = r#"
+        (async () => {
+            const out = [];
+
+            for (const attempt of [
+                () => crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-521' }, true, ['sign']),
+                () => crypto.subtle.importKey('raw', new Uint8Array(65).fill(4), { name: 'ECDSA', namedCurve: 'P-256' }, true, ['verify']),
+            ]) {
+                try {
+                    await attempt();
+                    out.push('accepted');
+                } catch (error) {
+                    out.push(error.name);
+                }
+            }
+
+            return out.join();
+        })()
+    "#;
+
+    assert_eq!(js(script).await, "NotSupportedError,DataError");
+}

@@ -99,7 +99,8 @@ async fn test_json_round_trip_of_awkward_values() {
 
 #[tokio::test]
 async fn test_web_platform_globals_are_absent() {
-    let missing = ["fetch", "Intl"];
+    // nova_vm has no Intl, and the runtime does not make one up.
+    let missing = ["Intl"];
 
     let script = format!(
         "addEventListener('fetch', (event) => event.respondWith(new Response([{}].join(','))));",

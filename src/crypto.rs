@@ -28,8 +28,8 @@ use sha2::Sha512;
 /// past the JS layer cannot ask for an unbounded allocation.
 const MAX_BYTES: i32 = 65_536;
 
-/// `__ow_native_random_hex(count)`: hex-encoded random bytes.
-pub fn native_random_hex<'gc>(
+/// `__ow_native_random(count)`: that many random bytes, as an `ArrayBuffer`.
+pub fn native_random<'gc>(
     agent: &mut Agent,
     _this: Value,
     args: ArgumentsList,
@@ -42,13 +42,7 @@ pub fn native_random_hex<'gc>(
 
     getrandom::fill(&mut bytes).expect("the system random source is always available");
 
-    let mut hex = String::with_capacity(count * 2);
-
-    for byte in bytes {
-        hex.push_str(&format!("{byte:02x}"));
-    }
-
-    Ok(JsString::from_string(agent, hex, gc.nogc()).unbind().into())
+    crate::compression::buffer_of(agent, &bytes, gc)
 }
 
 /// `__ow_native_digest(algorithm, hex)`: the digest of those bytes, in hex, or
@@ -85,7 +79,7 @@ pub fn native_digest<'gc>(
         .into())
 }
 
-fn from_hex(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn from_hex(text: &str) -> Option<Vec<u8>> {
     if !text.len().is_multiple_of(2) {
         return None;
     }
@@ -232,4 +226,147 @@ pub fn native_aes_gcm<'gc>(
     Ok(JsString::from_string(agent, to_hex(&out), gc.nogc())
         .unbind()
         .into())
+}
+
+/// What one ECDSA operation answers.
+enum Answer {
+    Text(String),
+    Flag(bool),
+    /// A key, a digest or a curve the operation cannot take.
+    Invalid,
+}
+
+/// One curve's ECDSA, with the field size its private scalar is drawn at.
+macro_rules! ecdsa_curve {
+    ($name:ident, $curve:ident, $size:expr) => {
+        fn $name(op: &str, a: &str, b: &str, c: &str) -> Answer {
+            use $curve::ecdsa::Signature;
+            use $curve::ecdsa::SigningKey;
+            use $curve::ecdsa::VerifyingKey;
+            use $curve::ecdsa::signature::hazmat::PrehashSigner;
+            use $curve::ecdsa::signature::hazmat::PrehashVerifier;
+
+            match op {
+                // A scalar outside the group order is drawn again, never
+                // reduced, so the key is uniform.
+                "generate" => loop {
+                    let mut scalar = [0u8; $size];
+
+                    getrandom::fill(&mut scalar)
+                        .expect("the system random source is always available");
+
+                    let Ok(signing) = SigningKey::from_slice(&scalar) else {
+                        continue;
+                    };
+
+                    let point = signing.verifying_key().to_sec1_point(false);
+
+                    break Answer::Text(format!(
+                        "{}:{}",
+                        to_hex(&scalar),
+                        to_hex(point.as_bytes())
+                    ));
+                },
+                "sign" => {
+                    let (Some(key), Some(digest)) = (from_hex(a), from_hex(b)) else {
+                        return Answer::Invalid;
+                    };
+
+                    let Ok(signing) = SigningKey::from_slice(&key) else {
+                        return Answer::Invalid;
+                    };
+
+                    let Ok(signature) = PrehashSigner::<Signature>::sign_prehash(&signing, &digest)
+                    else {
+                        return Answer::Invalid;
+                    };
+
+                    Answer::Text(to_hex(&signature.to_bytes()))
+                }
+                "verify" => {
+                    let (Some(key), Some(digest), Some(signature)) =
+                        (from_hex(a), from_hex(b), from_hex(c))
+                    else {
+                        return Answer::Invalid;
+                    };
+
+                    let Ok(verifying) = VerifyingKey::from_sec1_bytes(&key) else {
+                        return Answer::Invalid;
+                    };
+
+                    // A signature of the wrong size does not hold, which is
+                    // not the same as a key that cannot be used.
+                    let Ok(signature) = Signature::from_slice(&signature) else {
+                        return Answer::Flag(false);
+                    };
+
+                    Answer::Flag(verifying.verify_prehash(&digest, &signature).is_ok())
+                }
+                // Whether these bytes are a point on the curve.
+                "check" => Answer::Flag(
+                    from_hex(a).is_some_and(|key| VerifyingKey::from_sec1_bytes(&key).is_ok()),
+                ),
+                _ => Answer::Invalid,
+            }
+        }
+    };
+}
+
+ecdsa_curve!(ecdsa_p256, p256, 32);
+ecdsa_curve!(ecdsa_p384, p384, 48);
+
+/// `__ow_native_ecdsa(op, curve, a, b, c)`, everything in hex.
+///
+/// - `generate`: `"<private scalar>:<public point>"`; the point is the
+///   uncompressed SEC1 encoding, which is what `exportKey("raw")` hands back.
+/// - `sign(private, digest)`: the signature as `r` then `s`, the fixed size
+///   Web Crypto uses, not the DER one.
+/// - `verify(public, digest, signature)`: `true` or `false`.
+/// - `check(public)`: whether the bytes are a point on the curve.
+///
+/// `null` for a curve, a key or a digest the operation cannot take.
+pub fn native_ecdsa<'gc>(
+    agent: &mut Agent,
+    _this: Value,
+    args: ArgumentsList,
+    mut gc: GcScope<'gc, '_>,
+) -> JsResult<'gc, Value<'gc>> {
+    let mut texts = Vec::with_capacity(5);
+
+    for at in 0..5 {
+        let value = args.get(at).scope(agent, gc.nogc());
+
+        texts.push(value);
+    }
+
+    let mut parts = Vec::with_capacity(5);
+
+    for value in texts {
+        let value = value.get(agent);
+
+        // An operation leaves the arguments it has no use for out.
+        if value.is_undefined() {
+            parts.push(String::new());
+
+            continue;
+        }
+
+        let value = value.to_string(agent, gc.reborrow()).unbind()?;
+
+        parts.push(value.to_string_lossy(agent).into_owned());
+    }
+
+    let answer = match parts[1].as_str() {
+        "P-256" => ecdsa_p256(&parts[0], &parts[2], &parts[3], &parts[4]),
+        "P-384" => ecdsa_p384(&parts[0], &parts[2], &parts[3], &parts[4]),
+        _ => Answer::Invalid,
+    };
+
+    Ok(match answer {
+        Answer::Text(text) => JsString::from_string(agent, text, gc.nogc())
+            .unbind()
+            .into(),
+        Answer::Flag(flag) => Value::Boolean(flag),
+        Answer::Invalid => Value::Null,
+    })
 }

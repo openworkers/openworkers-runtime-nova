@@ -41,6 +41,46 @@
     return bytes;
   }
 
+  function base64Of(bytes) {
+    let binary = '';
+
+    // Spreading the whole array at once overflows the call stack.
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+
+    return btoa(binary);
+  }
+
+  // A fetch the host may refuse: it answers whatever its operations handler
+  // allows. The whole body crosses at once, so a response is never streamed.
+  globalThis.fetch = async function fetch(input, init) {
+    const request = new Request(input, init);
+
+    if (request.signal.aborted) {
+      throw request.signal.reason;
+    }
+
+    const body = request.body === null ? undefined : base64Of(new Uint8Array(await request.arrayBuffer()));
+
+    const answer = await call('http', '', 'fetch', {
+      url: request.url,
+      method: request.method,
+      headers: Object.fromEntries(request.headers),
+      bodyBase64: body,
+    });
+
+    const bytes = bytesOf(answer.body);
+
+    // These statuses have no body, and a Response refuses one.
+    const bodiless = answer.status === 204 || answer.status === 205 || answer.status === 304;
+
+    return new Response(bodiless ? null : bytes, {
+      status: answer.status,
+      headers: answer.headers,
+    });
+  };
+
   globalThis.__ow_assets_binding = function (name) {
     return {
       fetch(input, init) {

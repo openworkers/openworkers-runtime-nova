@@ -49,6 +49,15 @@ hmac = "0.13"
 # An asset body is arbitrary bytes, and only text crosses into nova
 base64 = "0.23"
 aes-gcm = "0.11"
+# ECDSA signs a digest the guest layer already computed
+p256 = { version = "0.14", features = ["ecdsa"] }
+p384 = { version = "0.14", features = ["ecdsa"] }
+# The URLPattern grammar; the surface matches with the engine's own RegExp
+urlpattern = "0.6"
+# The codecs behind CompressionStream
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# The legacy encodings a TextDecoder is asked for by label
+encoding_rs = "0.8"
 
 [dev-dependencies]
 openworkers-transform = { git = "https://github.com/openworkers/openworkers-transform", tag = "v0.1.0" }

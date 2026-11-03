@@ -2,8 +2,8 @@
 (function () {
   'use strict';
 
-  // Every label the Encoding standard maps to UTF-8; no other encoding is
-  // decodable here, so the rest are rejected rather than approximated.
+  // Every label the Encoding standard maps to UTF-8. UTF-8 is decoded here, with
+  // its state kept between `stream` calls; any other label goes to the host.
   const UTF8_LABELS = new Set([
     'unicode-1-1-utf-8',
     'unicode11utf8',
@@ -95,7 +95,19 @@
     throw new TypeError('decode expects an ArrayBuffer or a view of one');
   }
 
+  function toHex(bytes) {
+    let hex = '';
+
+    for (let i = 0; i < bytes.length; i++) {
+      hex += bytes[i].toString(16).padStart(2, '0');
+    }
+
+    return hex;
+  }
+
   class TextDecoder {
+    // The standard's name for a non-UTF-8 encoding, or null for UTF-8.
+    #legacy = null;
     #fatal;
     #ignoreBOM;
     #bomSeen = false;
@@ -111,7 +123,13 @@
         .toLowerCase();
 
       if (!UTF8_LABELS.has(encoding)) {
-        throw new RangeError('unsupported encoding: ' + encoding);
+        const name = __ow_native_encoding('name', encoding);
+
+        if (name === null) {
+          throw new RangeError('unsupported encoding: ' + encoding);
+        }
+
+        this.#legacy = name;
       }
 
       options = options || {};
@@ -120,7 +138,7 @@
     }
 
     get encoding() {
-      return 'utf-8';
+      return this.#legacy === null ? 'utf-8' : this.#legacy.toLowerCase();
     }
 
     get fatal() {
@@ -134,6 +152,11 @@
     decode(input, options) {
       const stream = Boolean((options || {}).stream);
       const bytes = toBytes(input);
+
+      if (this.#legacy !== null) {
+        return this.#decodeLegacy(bytes);
+      }
+
       const points = [];
 
       for (let i = 0; i < bytes.length; i++) {
@@ -201,6 +224,23 @@
       // Spreading the whole array at once overflows the call stack.
       for (let i = 0; i < points.length; i += 1024) {
         text += String.fromCodePoint(...points.slice(i, i + 1024));
+      }
+
+      return text;
+    }
+
+    // The host decodes whatever it is given in one go; see encoding.rs.
+    #decodeLegacy(bytes) {
+      const text = __ow_native_encoding(
+        'decode',
+        this.#legacy,
+        toHex(bytes),
+        this.#fatal,
+        this.#ignoreBOM
+      );
+
+      if (text === false) {
+        throw new TypeError('decode: malformed ' + this.#legacy + ' sequence');
       }
 
       return text;

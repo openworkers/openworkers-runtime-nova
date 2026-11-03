@@ -57,6 +57,9 @@ struct FetchParams {
     headers: Option<std::collections::HashMap<String, String>>,
     #[serde(default)]
     body: Option<String>,
+    /// A request body is arbitrary bytes and only text crosses here.
+    #[serde(default, rename = "bodyBase64")]
+    body_base64: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -117,6 +120,7 @@ fn answer(
 ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> {
     match kind.as_str() {
         "fetch" => Box::pin(async move { binding_fetch(ops, name, params).await }),
+        "http" => Box::pin(async move { http_fetch(ops, params).await }),
         "query" => Box::pin(async move { binding_query(ops, name, params).await }),
         #[cfg(feature = "invoke")]
         "invoke" => Box::pin(async move { binding_invoke(ops, name, params).await }),
@@ -154,6 +158,45 @@ async fn binding_fetch(
         "status": response.status,
         "headers": response.headers,
         // An asset is arbitrary bytes and only text crosses here.
+        "body": BASE64.encode(&body),
+    }))
+    .map_err(|e| e.to_string())
+}
+
+/// The guest's own `fetch`: a request to the network, not to a binding. The
+/// host decides what it may reach.
+async fn http_fetch(ops: OperationsHandle, params: String) -> Result<String, String> {
+    let params: FetchParams =
+        serde_json::from_str(&params).map_err(|e| format!("bad fetch parameters: {e}"))?;
+
+    let body = match params.body_base64 {
+        Some(body) => RequestBody::Bytes(
+            BASE64
+                .decode(body)
+                .map_err(|e| format!("bad request body: {e}"))?
+                .into(),
+        ),
+        None => RequestBody::None,
+    };
+
+    let request = HttpRequest {
+        method: params
+            .method
+            .as_deref()
+            .unwrap_or("GET")
+            .parse()
+            .unwrap_or_default(),
+        url: params.url,
+        headers: params.headers.unwrap_or_default(),
+        body,
+    };
+
+    let response = ops.handle_fetch(request).await?;
+    let body = collect(response.body).await?;
+
+    serde_json::to_string(&serde_json::json!({
+        "status": response.status,
+        "headers": response.headers,
         "body": BASE64.encode(&body),
     }))
     .map_err(|e| e.to_string())

@@ -193,9 +193,44 @@ async fn test_text_decoder_accepts_buffers_and_views() {
 #[tokio::test]
 async fn test_text_decoder_rejects_an_encoding_it_cannot_decode() {
     assert!(
-        js_err("new TextDecoder('latin1')")
+        js_err("new TextDecoder('no-such-encoding')")
             .await
             .contains("RangeError")
     );
     assert_eq!(js("new TextDecoder('UTF8').encoding").await, "utf-8");
+}
+
+#[tokio::test]
+async fn test_text_decoder_decodes_windows_1252_and_names_it_by_the_standard() {
+    // 0x80 is the euro sign there, where Latin-1 proper has a control code.
+    let script = "new TextDecoder('windows-1252').decode(new Uint8Array([0x80, 0xe9]))";
+
+    assert_eq!(js(script).await, "\u{20ac}\u{e9}");
+
+    // `latin1` is a label of windows-1252 in the Encoding Standard.
+    assert_eq!(
+        js("new TextDecoder('latin1').encoding").await,
+        "windows-1252"
+    );
+}
+
+#[tokio::test]
+async fn test_text_decoder_decodes_utf_16_and_drops_its_byte_order_mark() {
+    let script =
+        "new TextDecoder('utf-16le').decode(new Uint8Array([0xff, 0xfe, 0x3d, 0xd8, 0x00, 0xde]))";
+
+    assert_eq!(js(script).await, "\u{1f600}");
+}
+
+#[tokio::test]
+async fn test_a_legacy_decoder_in_fatal_mode_throws_on_malformed_bytes() {
+    // A lone high surrogate is not UTF-16.
+    let script =
+        "new TextDecoder('utf-16le', { fatal: true }).decode(new Uint8Array([0x00, 0xd8]))";
+
+    assert!(js_err(script).await.contains("TypeError"));
+    assert_eq!(
+        js("new TextDecoder('utf-16le').decode(new Uint8Array([0x00, 0xd8])).length").await,
+        "1"
+    );
 }
