@@ -1135,7 +1135,7 @@ checksum = "610a5acd306ec67f907abe5567859a3c693fb9886eb1f012ab8f2a47bef3db51"
 [[package]]
 name = "nova_vm"
 version = "1.0.0"
-source = "git+https://github.com/openworkers/nova?tag=v1.0.0-ow.2#e9ca1b789c4aac3ddbbc1810e7b7c559b8837d6f"
+source = "git+https://github.com/openworkers/nova?tag=v1.0.0-ow.3#d93f9190a8a78a0abb51ed74736d2cc8c6883c33"
 dependencies = [
  "ahash",
  "ecmascript_atomics",
@@ -1274,8 +1274,8 @@ dependencies = [
 
 [[package]]
 name = "openworkers-wintertc"
-version = "0.1.6"
-source = "git+https://github.com/openworkers/openworkers-wintertc?tag=v0.1.6#e7825c2b8be933d54d206197822be00ee65e345f"
+version = "0.1.12"
+source = "git+https://github.com/openworkers/openworkers-wintertc?tag=v0.1.12#3ef4512820d52f3160d1d02006fae5d681dfa1b6"
 
 [[package]]
 name = "owo-colors"
@@ -2196,7 +2196,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 [[package]]
 name = "small_string"
 version = "1.0.0"
-source = "git+https://github.com/openworkers/nova?tag=v1.0.0-ow.2#e9ca1b789c4aac3ddbbc1810e7b7c559b8837d6f"
+source = "git+https://github.com/openworkers/nova?tag=v1.0.0-ow.3#d93f9190a8a78a0abb51ed74736d2cc8c6883c33"
 dependencies = [
  "wtf8",
 ]

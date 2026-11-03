@@ -116,10 +116,6 @@ async fn test_a_format_the_standard_does_not_name_is_refused() {
     assert_eq!(js(script).await, "TypeError,TypeError");
 }
 
-// The host op throws a TypeError here, but an error thrown by a transformer's
-// `flush` never reaches the readable side of the shared TransformStream
-// (openworkers-wintertc js/streams.js, the sink's close), so the read hangs.
-#[ignore = "waits on the TransformStream flush error in openworkers-wintertc"]
 #[tokio::test]
 async fn test_data_that_is_not_compressed_rejects_the_read() {
     let script = format!(

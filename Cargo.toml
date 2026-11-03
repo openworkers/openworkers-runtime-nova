@@ -15,7 +15,7 @@ openworkers-core = { git = "https://github.com/openworkers/openworkers-core", ta
 
 # The shared web surface
 # openworkers-wintertc = { path = "../openworkers-wintertc" }
-openworkers-wintertc = { git = "https://github.com/openworkers/openworkers-wintertc", tag = "v0.1.6" }
+openworkers-wintertc = { git = "https://github.com/openworkers/openworkers-wintertc", tag = "v0.1.12" }
 
 # Nova JavaScript engine (pure Rust, data-oriented, MPL-2.0)
 # The 1.0.0 release plus the seven cfg attributes Intrinsics::temporal* needs to
@@ -23,7 +23,7 @@ openworkers-wintertc = { git = "https://github.com/openworkers/openworkers-winte
 # Dropping `temporal` is what keeps nova_vm out of temporal_rs 0.1.2, which
 # compiles only against icu_calendar 2.1, where v8 152 forces 2.2.1 on a shared
 # lockfile. Temporal was never reachable from the guest anyway.
-nova_vm = { git = "https://github.com/openworkers/nova", tag = "v1.0.0-ow.2", default-features = false, features = [
+nova_vm = { git = "https://github.com/openworkers/nova", tag = "v1.0.0-ow.3", default-features = false, features = [
     "math",
     "json",
     "date",
